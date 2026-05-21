@@ -153,10 +153,13 @@ if st.button("🚀 근무표 만들기", type="primary", use_container_width=Tru
                             row["연가"] = stats['연가']
                             row["특별"] = stats['특별']
                             row["교육"] = stats['교육']
-                            row["합계"] = stats['근무일']
+                            
+                            # 💡 합계: 모든 항목을 합친 진정한 의미의 '총계' (월 일수와 동일해야 함)
+                            row["합계"] = (stats['주간'] + stats['야간'] + stats['비번'] + 
+                                         stats['휴일'] + stats['연가'] + stats['특별'] + stats['교육'])
                             table_data.append(row)
                             
-                        # 💡 추가: 하단 일일 인원 합계 계산
+                        # 하단 일일 인원 합계 계산
                         day_count_row = {"이름": "주간 근무인원"}
                         night_count_row = {"이름": "야간 근무인원"}
                         
@@ -173,20 +176,3 @@ if st.button("🚀 근무표 만들기", type="primary", use_container_width=Tru
                             
                         table_data.append(day_count_row)
                         table_data.append(night_count_row)
-                            
-                        # 판다스 데이터프레임 렌더링
-                        df = pd.DataFrame(table_data)
-                        st.dataframe(df, use_container_width=True, hide_index=True)
-                        
-                        # 엑셀 다운로드
-                        buffer = io.BytesIO()
-                        with pd.ExcelWriter(buffer, engine='openpyxl') as writer:
-                            df.to_excel(writer, index=False, sheet_name=f"{res.solution_label}안")
-                        
-                        st.download_button(
-                            label=f"📥 {res.solution_label}안 엑셀(Excel) 다운로드",
-                            data=buffer.getvalue(),
-                            file_name=f"근무표_{year}년_{month}월_{res.solution_label}안.xlsx",
-                            mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
-                            key=f"download_{idx}"
-                        )
