@@ -13,8 +13,10 @@ st.title("🚀 사회복무요원 근무표 자동화 시스템")
 with st.sidebar:
     st.header("⚙️ 기본 설정")
     today = datetime.date.today()
-    target_date = st.date_input("생성 연/월 선택", today)
-    year, month = target_date.year, target_date.month
+    st.markdown("**생성 연/월 선택**")
+    y_col, m_col = st.columns(2)
+    year = y_col.selectbox("연도", range(today.year - 1, today.year + 4), index=1, label_visibility="collapsed", format_func=lambda x: f"{x}년")
+    month = m_col.selectbox("월", range(1, 13), index=today.month - 1, label_visibility="collapsed", format_func=lambda x: f"{x}월")
     
     num_solutions = st.slider("생성할 대안 수", 1, 5, 3)
     time_limit = st.number_input("탐색 시간 제한(초)", 10, 300, 30)
@@ -42,7 +44,7 @@ cols[4].markdown("**삭제**")
 
 for idx, emp in enumerate(st.session_state.employees):
     c1, c2, c3, c4, c5 = st.columns([2, 1, 1, 4, 1])
-    emp['name'] = c1.text_input(f"이름 {idx}", value=emp['name'], label_visibility="collapsed", placeholder="성함 입력")
+    emp['name'] = c1.text_input(f"이름 {idx}", value=emp['name'], label_visibility="collapsed", placeholder="이 입력")
     emp['prefer_day'] = c2.checkbox(f"주 {idx}", value=emp['prefer_day'], label_visibility="collapsed")
     emp['prefer_night'] = c3.checkbox(f"야 {idx}", value=emp['prefer_night'], label_visibility="collapsed")
     emp['fixed'] = c4.text_input(f"일정 {idx}", value=emp['fixed'], label_visibility="collapsed", placeholder="날짜:항목 (쉼표 구분)")
