@@ -10,7 +10,7 @@ from validator import validate
 
 st.set_page_config(page_title="사회복무요원 근무표 생성기", layout="wide")
 
-# --- 세션 상태 초기화 (화면 전환용) ---
+# --- 세션 상태 초기화 ---
 if 'page' not in st.session_state:
     st.session_state.page = 'main'
 if 'generated_results' not in st.session_state:
@@ -20,21 +20,33 @@ if 'selected_idx' not in st.session_state:
 if 'employees' not in st.session_state:
     st.session_state.employees = []
 
-# --- 스타일링 함수 (엑셀 가독성 적용) ---
+# 💡 스타일링 함수: 요일(평일/주말/공휴일) 색상 조건 추가
 def color_shifts(val):
-    if val == "주간": return 'background-color: #0070C0; color: white; font-weight: bold;'
-    if val == "야간": return 'background-color: #FFFF00; color: black; font-weight: bold;'
-    if val == "휴일": return 'color: red; font-weight: bold;'
-    if val == "연가": return 'background-color: #ED7D31; color: white; font-weight: bold;'
-    if val == "특별": return 'background-color: #7030A0; color: white; font-weight: bold;'
-    if val == "비번": return 'color: #808080;'
-    return ''
+    v = str(val).strip()
+    style = 'text-align: center; '
+    
+    # 근무 유형 스타일
+    if v == "주": return style + 'background-color: #0070C0; color: white; font-weight: bold;'
+    if v == "야": return style + 'background-color: #FFFF00; color: black; font-weight: bold;'
+    if v == "휴": return style + 'color: #FF4B4B; font-weight: bold;'
+    if v == "연": return style + 'background-color: #ED7D31; color: white; font-weight: bold;'
+    if v == "특": return style + 'background-color: #7030A0; color: white; font-weight: bold;'
+    if v == "교": return style + 'background-color: #00B050; color: white; font-weight: bold;'
+    if v == "비": return style + 'color: #808080;'
+    
+    # 요일 행 스타일 (주말 및 공휴일은 옅은 붉은색 배경에 빨간 글씨)
+    if v in ["토", "일"] or "(휴)" in v:
+        return style + 'background-color: #FFCCCC; color: #FF0000; font-weight: bold;'
+    # 요일 행 스타일 (평일은 옅은 회색 배경)
+    if v in ["월", "화", "수", "목", "금"]:
+        return style + 'background-color: #F0F2F6; color: black; font-weight: bold;'
+        
+    return style
 
-# 문자열 ↔ ShiftType 변환용 딕셔너리
 SHIFT_MAP = {
-    "주간": ShiftType.DAY, "야간": ShiftType.NIGHT, "비번": ShiftType.OFF,
-    "휴일": ShiftType.HOLIDAY, "연가": ShiftType.ANNUAL, 
-    "특별": ShiftType.SPECIAL, "교육": ShiftType.EDUCATION
+    "주": ShiftType.DAY, "야": ShiftType.NIGHT, "비": ShiftType.OFF,
+    "휴": ShiftType.HOLIDAY, "연": ShiftType.ANNUAL, 
+    "특": ShiftType.SPECIAL, "교": ShiftType.EDUCATION
 }
 
 # ==========================================
@@ -116,7 +128,7 @@ def render_main_page():
                 r_cols = st.columns(4)
                 carryover[emp['name']] = {}
                 for i, d in enumerate([-3, -2, -1, 0]):
-                    val = r_cols[i].selectbox(f"{d}일 근무", ["주간", "야간", "비번", "휴일"], index=3, key=f"carry_{emp['name']}_{d}")
+                    val = r_cols[i].selectbox(f"{d}일 근무", ["주", "야", "비", "휴"], index=3, key=f"carry_{emp['name']}_{d}")
                     carryover[emp['name']][d] = SHIFT_MAP[val]
 
     st.divider()
@@ -144,7 +156,6 @@ def render_main_page():
                     st.session_state.generated_results = results
                     st.success("🎉 근무표 생성이 완료되었습니다! 아래 대안을 선택하여 상세 화면으로 이동하세요.")
                     
-    # 💡 생성된 대안 버튼 목록 표시 (페이지 이동 유도)
     if st.session_state.generated_results:
         st.markdown("### 📊 생성된 근무표 확인하기")
         btn_cols = st.columns(len(st.session_state.generated_results))
@@ -164,22 +175,47 @@ def render_detail_page():
     _, num_days = calendar.monthrange(year, month)
     month_days = list(range(1, num_days + 1))
 
-    # 상단 네비게이션 및 타이틀
     c1, c2 = st.columns([1, 4])
     if c1.button("◀ 이전 설정으로 돌아가기"):
         st.session_state.page = 'main'
         st.rerun()
     c2.title(f"🗓️ {year}년 {month}월 근무표 [{res.solution_label}안]")
 
-    # 화면 2 상호작용 토글 버튼들
     ctrl1, ctrl2, ctrl3 = st.columns(3)
     show_details = ctrl1.toggle("📊 자세히 보기 (통계 및 합계 표시)", value=False)
     edit_mode = ctrl2.toggle("✏️ 수동 수정 모드", value=False)
     
     st.info("💡 수정 모드를 켜면 표를 더블 클릭하여 직접 스케줄을 변경할 수 있습니다. (색상 효과는 뷰어 모드에서만 지원됩니다)")
 
-    # 1. 데이터프레임 구성 로직
     table_data = []
+    
+    # 💡 첫 번째 줄: 요일 행 추가 및 공휴일 판별 로직
+    day_row = {"이름": "요일"}
+    try:
+        import holidays
+        kr_holidays = holidays.KR(years=year)
+    except ImportError:
+        kr_holidays = {} # holidays 라이브러리가 없으면 일반 주말만 계산
+        
+    for d in month_days:
+        date_obj = datetime.date(year, month, d)
+        wd = ["월", "화", "수", "목", "금", "토", "일"][date_obj.weekday()]
+        
+        # 주말(토,일)이거나 대한민국 공휴일인 경우 판별
+        is_off = (date_obj.weekday() >= 5) or (date_obj in kr_holidays)
+        
+        if is_off:
+            # 평일인데 공휴일이면 '수(휴)' 형태로 표시하여 색상 렌더링에 활용
+            day_row[f"{d}일"] = f"{wd}(휴)" if date_obj.weekday() < 5 else wd
+        else:
+            day_row[f"{d}일"] = wd
+            
+    for col in ["주간", "야간", "비번", "휴일", "연가", "특별", "교육", "합계"]:
+        day_row[col] = None
+        
+    table_data.append(day_row)
+    
+    # 그 다음 줄부터 직원 근무 데이터 추가
     for emp in res.employees:
         row = {"이름": emp.name}
         for d in month_days:
@@ -210,35 +246,32 @@ def render_detail_page():
         table_data.extend([day_count_row, night_count_row])
 
     df = pd.DataFrame(table_data)
+    df.set_index("이름", inplace=True)
 
-    # 2. 표 출력 및 수정 로직
     if edit_mode:
-        # 수정 모드: st.data_editor 사용 (드롭다운 적용)
-        config = {"이름": st.column_config.TextColumn("이름", disabled=True)}
+        config = {}
+        # 💡 에디터 모드에서 요일 글씨 때문에 에러나는 것을 막기 위해 선택지 확장
         for d in month_days:
             config[f"{d}일"] = st.column_config.SelectboxColumn(
-                f"{d}일", options=["주간", "야간", "비번", "휴일", "연가", "특별", "교육"]
+                f"{d}일", 
+                options=["주", "야", "비", "휴", "연", "특", "교", "월", "화", "수", "목", "금", "토", "일", "월(휴)", "화(휴)", "수(휴)", "목(휴)", "금(휴)"]
             )
-        # 통계 칸은 수정 불가
         for col in ["주간", "야간", "비번", "휴일", "연가", "특별", "교육", "합계"]:
             config[col] = st.column_config.TextColumn(col, disabled=True)
 
-        edited_df = st.data_editor(df, column_config=config, use_container_width=True, hide_index=True)
+        edited_df = st.data_editor(df, column_config=config, use_container_width=True)
         
-        # 적용 및 검사 버튼
         if st.button("💾 변경사항 적용 및 제약 검사", type="primary"):
-            # 수정한 데이터프레임을 다시 MonthSchedule 객체로 변환
             new_schedule = {}
-            for _, row in edited_df.iterrows():
-                name = row["이름"]
-                if name in ["주간인원", "야간인원"]: continue
+            for name, row in edited_df.iterrows():
+                # 💡 요일 행은 스케줄 검사에서 제외
+                if name in ["요일", "주간인원", "야간인원"]: continue
                 new_schedule[name] = {}
                 for d in month_days:
                     val = row[f"{d}일"]
                     if val and val in SHIFT_MAP:
                         new_schedule[name][d] = SHIFT_MAP[val]
             
-            # 임시 객체 생성 및 검증
             temp_res = MonthSchedule(year, month, num_days, res.employees, new_schedule, 0, res.solution_label)
             violations = validate(temp_res)
             
@@ -248,29 +281,25 @@ def render_detail_page():
                     st.warning(f"**[{name} 요원 | {day}일]** {msg}")
             else:
                 st.success("✅ 완벽합니다! 제약 위반이 없습니다.")
-                # 실제 데이터에 덮어쓰기
                 st.session_state.generated_results[st.session_state.selected_idx] = temp_res
                 st.rerun()
 
     else:
-        # 뷰어 모드: 색상 입힌 엑셀 스타일 출력
         styled_df = df.style.map(color_shifts)
-        st.dataframe(styled_df, use_container_width=True, hide_index=True)
+        st.dataframe(styled_df, use_container_width=True)
 
-    # 3. 엑셀 다운로드 (항상 표시)
     st.divider()
     buffer = io.BytesIO()
     with pd.ExcelWriter(buffer, engine='openpyxl') as writer:
-        df.to_excel(writer, index=False, sheet_name=f"{res.solution_label}안")
+        df.reset_index().to_excel(writer, index=False, sheet_name=f"{res.solution_label}안")
     
     st.download_button(
         label="📥 현재 스케줄 엑셀(Excel) 다운로드",
         data=buffer.getvalue(),
-        file_name=f"근무표_{year}년_{month}월.xlsx",
+        file_name=f"근무표_{year}년_{month}월_{res.solution_label}안.xlsx",
         mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
     )
 
-# --- 앱 실행(라우팅) ---
 if st.session_state.page == 'main':
     render_main_page()
 elif st.session_state.page == 'detail':
