@@ -34,11 +34,11 @@ if st.button("➕ 사회복무요원 추가"):
 
 emp_data = []
 cols = st.columns([2, 1, 1, 4, 1])
-cols[0].label("이름")
-cols[1].label("주간선호")
-cols[2].label("야간선호")
-cols[3].label("고정 일정 (예: 5:연가, 15:교육)")
-cols[4].label("삭제")
+cols[0].markdown("**이름**")
+cols[1].markdown("**주간선호**")
+cols[2].markdown("**야간선호**")
+cols[3].markdown("**고정 일정 (예: 5:연가, 15:교육)**")
+cols[4].markdown("**삭제**")
 
 for idx, emp in enumerate(st.session_state.employees):
     c1, c2, c3, c4, c5 = st.columns([2, 1, 1, 4, 1])
