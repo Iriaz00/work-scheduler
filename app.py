@@ -4,13 +4,14 @@ import calendar
 import pandas as pd
 import io
 import copy
+import json
 from models import Employee, FixedSchedule, ShiftType, MonthSchedule
 from scheduler import ShiftScheduler
 from validator import validate
 
 st.set_page_config(page_title="사회복무요원 근무표 생성기", layout="wide")
 
-# --- 세션 상태 초기화 (화면 전환 및 데이터 보존용) ---
+# --- 세션 상태 초기화 ---
 if 'page' not in st.session_state:
     st.session_state.page = 'main'
 if 'generated_results' not in st.session_state:
@@ -23,8 +24,10 @@ if 'selected_emp_name' not in st.session_state:
     st.session_state.selected_emp_name = ""
 if 'carryover_data' not in st.session_state:
     st.session_state.carryover_data = {}
+if 'preset_carryover' not in st.session_state:
+    st.session_state.preset_carryover = {}
 
-# --- 스타일링 관련 함수 및 맵핑 ---
+# --- 스타일링 및 맵핑 ---
 def color_shifts(val):
     v = str(val).strip()
     style = 'text-align: center; '
@@ -42,7 +45,6 @@ def color_shifts(val):
         return style + 'background-color: #F0F2F6; color: black; font-weight: bold;'
     return style
 
-# 달력 셀 내부 전용 색상 맵 (HTML 렌더링용)
 CAL_COLOR_MAP = {
     "주": "background-color: #0070C0; color: white;",
     "야": "background-color: #FFFF00; color: black;",
@@ -79,6 +81,29 @@ def render_main_page():
         st.session_state.current_month = month
         st.session_state.num_solutions = num_solutions
         st.session_state.time_limit = time_limit
+
+        # 💡 프리셋(데이터 저장/불러오기) 기능 추가 구역
+        st.markdown("---")
+        st.header("💾 인원 및 설정 데이터 관리")
+        
+        # 1. 불러오기 기능
+        uploaded_file = st.file_uploader("📂 백업 파일(.json) 불러오기", type=["json"])
+        if uploaded_file is not None:
+            if st.button("데이터 적용하기", use_container_width=True):
+                try:
+                    data = json.load(uploaded_file)
+                    st.session_state.employees = data.get("employees", [])
+                    st.session_state.preset_carryover = data.get("carryover", {})
+                    st.success("✅ 데이터를 성공적으로 불러왔습니다!")
+                    st.rerun()
+                except Exception as e:
+                    st.error("파일을 읽는 중 오류가 발생했습니다.")
+        
+        # 2. 초기화 기능
+        if st.button("🗑️ 모든 인원 초기화", use_container_width=True):
+            st.session_state.employees = []
+            st.session_state.preset_carryover = {}
+            st.rerun()
 
     _, num_days = calendar.monthrange(year, month)
     month_days = list(range(1, num_days + 1))
@@ -133,16 +158,46 @@ def render_main_page():
 
     st.header("📋 이월 데이터 (전달 마지막 4일)")
     carryover = {}
+    preset_carryover_for_json = {} # 다운로드용 데이터 수집 딕셔너리
+    
     if st.session_state.employees:
         for emp in st.session_state.employees:
             if emp['name'].strip():
                 st.subheader(f"📍 {emp['name']}")
                 r_cols = st.columns(4)
                 carryover[emp['name']] = {}
+                preset_carryover_for_json[emp['name']] = {}
+                
                 for i, d in enumerate([-3, -2, -1, 0]):
-                    val = r_cols[i].selectbox(f"{d}일 근무", ["주", "야", "비", "휴"], index=3, key=f"carry_{emp['name']}_{d}")
+                    # 프리셋에 저장된 값이 있다면 불러와서 적용, 없으면 기본값 "휴"
+                    default_val = st.session_state.preset_carryover.get(emp['name'], {}).get(str(d), "휴")
+                    try:
+                        default_idx = ["주", "야", "비", "휴"].index(default_val)
+                    except ValueError:
+                        default_idx = 3
+
+                    val = r_cols[i].selectbox(f"{d}일 근무", ["주", "야", "비", "휴"], index=default_idx, key=f"carry_{emp['name']}_{d}")
+                    
                     carryover[emp['name']][d] = SHIFT_MAP[val]
+                    preset_carryover_for_json[emp['name']][str(d)] = val # JSON은 문자열 키(Key)만 지원함
+                    
         st.session_state.carryover_data = carryover
+
+    # 💡 3. 프리셋 다운로드 버튼 (사이드바 하단 배치)
+    with st.sidebar:
+        st.markdown("---")
+        preset_data = {
+            "employees": st.session_state.employees,
+            "carryover": preset_carryover_for_json
+        }
+        json_str = json.dumps(preset_data, ensure_ascii=False, indent=2)
+        st.download_button(
+            label="📥 현재 세팅 파일(Preset) 저장하기",
+            data=json_str,
+            file_name=f"근무설정_{year}년_{month}월.json",
+            mime="application/json",
+            use_container_width=True
+        )
 
     st.divider()
     if st.button("🚀 근무표 생성하기", type="primary", use_container_width=True):
@@ -297,11 +352,9 @@ def render_detail_page():
     
     emp_names = [emp.name for emp in res.employees]
     if emp_names:
-        # 💡 무조건 '2줄'로 배치하기 위해 열의 개수를 동적으로 계산 (총 인원의 절반 올림값)
         cols_per_row = max(1, (len(emp_names) + 1) // 2)
         btn_cols = st.columns(cols_per_row)
         for idx, name in enumerate(emp_names):
-            # 인덱스를 통해 앞의 절반은 첫 번째 줄, 뒤의 절반은 두 번째 줄로 자동 배치됩니다.
             col_target = btn_cols[idx % cols_per_row]
             if col_target.button(f"👤 {name}", use_container_width=True, key=f"jump_{name}"):
                 st.session_state.selected_emp_name = name
