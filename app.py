@@ -34,7 +34,7 @@ if 'employees' not in st.session_state:
     st.session_state.employees = []
 
 def add_employee():
-    # 💡 지정 휴일 추가 반영
+    # 💡 지정 휴일 추가 및 딕셔너리 구조 적용
     st.session_state.employees.append({
         "name": "", 
         "prefer_day": True, 
@@ -59,12 +59,17 @@ for idx, emp in enumerate(st.session_state.employees):
     emp['prefer_day'] = c2.checkbox(f"주 {idx}", value=emp['prefer_day'], label_visibility="collapsed")
     emp['prefer_night'] = c3.checkbox(f"야 {idx}", value=emp['prefer_night'], label_visibility="collapsed")
     
-    # 이전 데이터 호환성 보정
-    if isinstance(emp['fixed'], str) or '휴일' not in emp['fixed']:
-        emp['fixed'] = {"연가": emp.get('fixed', {}).get("연가", []), 
-                        "특별": emp.get('fixed', {}).get("특별", []), 
-                        "교육": emp.get('fixed', {}).get("교육", []), 
-                        "휴일": []}
+    # 💡 이전 텍스트 데이터 충돌(에러) 완전 차단 로직
+    old_fixed = emp.get('fixed', {})
+    if isinstance(old_fixed, str):
+        emp['fixed'] = {"연가": [], "특별": [], "교육": [], "휴일": []}
+    else:
+        emp['fixed'] = {
+            "연가": old_fixed.get("연가", []), 
+            "특별": old_fixed.get("특별", []), 
+            "교육": old_fixed.get("교육", []), 
+            "휴일": old_fixed.get("휴일", [])
+        }
         
     total_fixed = len(emp['fixed']['연가']) + len(emp['fixed']['특별']) + len(emp['fixed']['교육']) + len(emp['fixed']['휴일'])
     btn_label = f"📅 일정 관리 (총 {total_fixed}일)" if total_fixed > 0 else "📅 일정 추가"
@@ -72,12 +77,11 @@ for idx, emp in enumerate(st.session_state.employees):
     with c4.popover(btn_label, use_container_width=True):
         st.markdown(f"**{emp['name'] if emp['name'] else '이름 없음'}** 요원의 {month}월 고정 일정")
         
-        valid_hol = [d for d in emp['fixed'].get('휴일', []) if d in month_days]
-        valid_ann = [d for d in emp['fixed'].get('연가', []) if d in month_days]
-        valid_spe = [d for d in emp['fixed'].get('특별', []) if d in month_days]
-        valid_edu = [d for d in emp['fixed'].get('교육', []) if d in month_days]
+        valid_hol = [d for d in emp['fixed']['휴일'] if d in month_days]
+        valid_ann = [d for d in emp['fixed']['연가'] if d in month_days]
+        valid_spe = [d for d in emp['fixed']['특별'] if d in month_days]
+        valid_edu = [d for d in emp['fixed']['교육'] if d in month_days]
         
-        # 💡 지정 휴일 선택 추가
         emp['fixed']['휴일'] = st.multiselect("🔴 지정 휴일", options=month_days, default=valid_hol, key=f"hol_{idx}")
         emp['fixed']['연가'] = st.multiselect("🌴 연가", options=month_days, default=valid_ann, key=f"ann_{idx}")
         emp['fixed']['특별'] = st.multiselect("🎁 특별휴가", options=month_days, default=valid_spe, key=f"spe_{idx}")
@@ -112,11 +116,10 @@ if st.button("🚀 근무표 만들기", type="primary", use_container_width=Tru
             if not e['name'].strip(): continue # 이름 없으면 건너뜀
             
             fixed_list = []
-            if isinstance(e['fixed'], dict):
-                for d in e['fixed'].get('휴일', []): fixed_list.append(FixedSchedule(d, ShiftType.HOLIDAY)) # 지정 휴일 반영
-                for d in e['fixed'].get('연가', []): fixed_list.append(FixedSchedule(d, ShiftType.ANNUAL))
-                for d in e['fixed'].get('특별', []): fixed_list.append(FixedSchedule(d, ShiftType.SPECIAL))
-                for d in e['fixed'].get('교육', []): fixed_list.append(FixedSchedule(d, ShiftType.EDUCATION))
+            for d in e['fixed']['휴일']: fixed_list.append(FixedSchedule(d, ShiftType.HOLIDAY))
+            for d in e['fixed']['연가']: fixed_list.append(FixedSchedule(d, ShiftType.ANNUAL))
+            for d in e['fixed']['특별']: fixed_list.append(FixedSchedule(d, ShiftType.SPECIAL))
+            for d in e['fixed']['교육']: fixed_list.append(FixedSchedule(d, ShiftType.EDUCATION))
                     
             final_emps.append(Employee(e['name'], e['prefer_day'], e['prefer_night'], fixed_list))
         
