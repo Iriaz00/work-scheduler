@@ -293,15 +293,13 @@ def render_detail_page():
         styled_df = df.style.map(color_shifts)
         st.dataframe(styled_df, use_container_width=True)
 
-    # 💡 2번 화면 하단: 요원 이름들을 버튼으로 나열 (화면 3으로 연결)
     st.markdown("---")
     st.markdown("### 🔍 요원별 인물 상세 정보 (달력 보기)")
     st.caption("아래 요원의 이름을 클릭하면 해당 요원의 한 달 스케줄 달력과 상세 설정을 편집할 수 있는 화면으로 이동합니다.")
     
-    # 인원수에 맞게 컬럼을 쪼개서 가로로 이름 버튼들을 배치
     emp_names = [emp.name for emp in res.employees]
     if emp_names:
-        btn_cols = st.columns(min(8, len(emp_names))) # 한 줄에 최대 8명씩 배치
+        btn_cols = st.columns(min(8, len(emp_names)))
         for idx, name in enumerate(emp_names):
             col_target = btn_cols[idx % 8]
             if col_target.button(f"👤 {name}", use_container_width=True, key=f"jump_{name}"):
@@ -309,7 +307,6 @@ def render_detail_page():
                 st.session_state.page = 'individual'
                 st.rerun()
 
-    # 엑셀 다운로드
     st.divider()
     buffer = io.BytesIO()
     with pd.ExcelWriter(buffer, engine='openpyxl') as writer:
@@ -332,7 +329,6 @@ def render_individual_page():
     _, num_days = calendar.monthrange(year, month)
     month_days = list(range(1, num_days + 1))
 
-    # 세션 상태에서 실제 직원 데이터 매칭 기동
     emp_idx = next((i for i, e in enumerate(st.session_state.employees) if e['name'] == emp_name), None)
     
     c1, c2 = st.columns([1, 4])
@@ -347,7 +343,6 @@ def render_individual_page():
 
     emp_data = st.session_state.employees[emp_idx]
 
-    # 🛠️ 상단: 개인 설정 및 고정 일정 수정 레이아웃
     st.markdown("### ⚙️ 개인 근무 제약 및 선호도 수정")
     exp1 = st.expander("🛠️ 이 요원의 선호도 및 고정일정 변경하기 (클릭하여 열기)", expanded=False)
     with exp1:
@@ -372,7 +367,6 @@ def render_individual_page():
             else:
                 st.error("🚨 새로운 조건 제약이 너무 무거워 알고리즘 엔진이 해를 찾지 못했습니다. 제약을 완화해 주세요.")
 
-    # 🗓️ 하단: 한 달 스케줄 달력(Calendar) 시각화 기동
     st.markdown("---")
     st.markdown(f"### 🗓️ {month}월 스케줄 캘린더 구동 뷰어")
 
@@ -382,45 +376,39 @@ def render_individual_page():
     except ImportError:
         kr_holidays = {}
 
-    # 달력 틀 구성을 위한 파이썬 내부 달력 라이브러리 연동
-    # calendar.monthrange는 월요일=0, ..., 일요일=6 반환.
-    # 한국형 달력(일요일 시작) 형태로 칸 맞춤을 위해 전처리 진행
     first_weekday, _ = calendar.monthrange(year, month)
-    start_blank = (first_weekday + 1) % 7 # 일요일=0 기준으로 공백 칸 개수 환산
+    start_blank = (first_weekday + 1) % 7 
 
     cal_days = [None] * start_blank + month_days
     while len(cal_days) % 7 != 0:
         cal_days.append(None)
 
-    # 달력 헤더 출력
     headers = ["일", "월", "화", "수", "목", "금", "토"]
     h_cols = st.columns(7)
     for i, h in enumerate(headers):
         color = "#FF4B4B" if i == 0 else ("#0070C0" if i == 6 else "white")
-        h_cols[i].markdown(f"<div style='text-align: center; background-color: #31333F; color: {color}; padding: 5px; font-weight: bold; border-radius: 4px;'>{h}</div>", unsafe_html=True)
+        # 💡 에러 원인 수정: unsafe_allow_html=True 로 변경
+        h_cols[i].markdown(f"<div style='text-align: center; background-color: #31333F; color: {color}; padding: 5px; font-weight: bold; border-radius: 4px;'>{h}</div>", unsafe_allow_html=True)
 
-    # 주 단위 렌더링
     for week_idx in range(len(cal_days) // 7):
         week_days = cal_days[week_idx*7 : (week_idx+1)*7]
         w_cols = st.columns(7)
         
         for day_pos, d in enumerate(week_days):
             if d is None:
-                w_cols[day_pos].markdown("<div style='min-height: 80px;'></div>", unsafe_html=True)
+                # 💡 에러 원인 수정: unsafe_allow_html=True 로 변경
+                w_cols[day_pos].markdown("<div style='min-height: 80px;'></div>", unsafe_allow_html=True)
             else:
                 date_obj = datetime.date(year, month, d)
                 shift_val = res.get_shift(emp_name, d)
                 shift_str = shift_val.value if shift_val else ""
                 
-                # 오늘 요일 및 공휴일 여부 체크에 따른 날짜 글씨 색상
                 is_holiday = (day_pos == 0) or (date_obj in kr_holidays)
                 is_saturday = (day_pos == 6)
                 day_color = "#FF4B4B" if is_holiday else ("#0070C0" if is_saturday else "white")
                 
-                # 근무 타입에 따른 동적 백그라운드 색상 바인딩
                 cell_style = CAL_COLOR_MAP.get(shift_str, "background-color: #262730; color: white;")
                 
-                # 예쁜 격자형 카드 컴포넌트로 마크다운 조립 출력
                 html_box = f"""
                 <div style="
                     border: 1px solid #464855; 
@@ -445,7 +433,8 @@ def render_individual_page():
                     </div>
                 </div>
                 """
-                w_cols[day_pos].markdown(html_box, unsafe_html=True)
+                # 💡 에러 원인 수정: unsafe_allow_html=True 로 변경
+                w_cols[day_pos].markdown(html_box, unsafe_allow_html=True)
 
 # --- 메인 라우터 앱 흐름 기동 ---
 if st.session_state.page == 'main':
