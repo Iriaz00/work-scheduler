@@ -1,4 +1,3 @@
-
 from __future__ import annotations
 from typing import Dict, List, Optional, Tuple
 import calendar as cal_module
@@ -17,6 +16,7 @@ class ShiftScheduler:
       C3. 주간 연속 최대 4일 (이월 포함)
       C4. 주간→야간 전환 시 주간 최대 3일 (이월 포함)
       C5. 일일 주간 1~3명, 야간 1~2명
+      C6. 모든 요원의 총 휴일 수(로테이션 휴일 + 지정 휴일) 동일 강제 💡 (새로 추가)
 
     [소프트 제약 - 목적함수]
       S1. 주간/야간 선호도 반영 (+3점)
@@ -46,7 +46,7 @@ class ShiftScheduler:
             Employee(e.name, e.prefer_day, e.prefer_night, list(e.fixed_schedules))
             for e in employees
         ]
-        self.carryover     = carryover or {}
+        self.carryover      = carryover or {}
         self.num_solutions = num_solutions
         self.time_limit    = time_limit
 
@@ -134,11 +134,19 @@ class ShiftScheduler:
         self._c2_night_sequence(model, sv)
         self._c3_c4_consecutive_limits(model, sv)
         self._c5_daily_staffing(model, sv)
+        
+        # 💡 [핵심 수정] C6: 모든 요원의 총 휴일 수를 동일하게 제한
+        target_h = self._c6_equal_holidays(model, sv)
 
         for p in prev_results:
             self._exclude(model, sv, p)
 
-        model.Maximize(cp_model.LinearExpr.Sum(self._objective(model, sv)))
+        # 목적함수 기본 항들 가져오기
+        obj_terms = self._objective(model, sv)
+        # 💡 공평한 상태에서 최대한 많이 쉴 수 있도록 휴일 수 가중치(+10점) 반영
+        obj_terms.append(target_h * 10)
+
+        model.Maximize(cp_model.LinearExpr.Sum(obj_terms))
 
         solver = cp_model.CpSolver()
         solver.parameters.max_time_in_seconds = self.time_limit
@@ -184,7 +192,7 @@ class ShiftScheduler:
         return sv
 
     # ═══════════════════════════════════════════════
-    # 하드 제약 C1 ~ C5
+    # 하드 제약 C1 ~ C6
     # ═══════════════════════════════════════════════
 
     def _c1_one_shift_per_day(self, model, sv):
@@ -194,15 +202,7 @@ class ShiftScheduler:
                 model.AddExactlyOne([sv[(e, d, s)] for s in ALL_SHIFTS])
 
     def _c2_night_sequence(self, model, sv):
-        """
-        C2: 야-비-휴 세트 강제
-
-          ① 야[d]  → 비[d+1]      당월 내에서만 강제
-          ② 야[d]  → 휴[d+2]      당월 내에서만 강제
-          ③ 비[d]  → 야[d-1]      비번은 야간 직후에만 가능
-          ④ 월말 야간 허용         비·휴가 다음달로 넘어가면 이월 처리
-                                   (기존 night==0 강제 제거 → 핵심 버그 수정)
-        """
+        """C2: 야-비-휴 세트 강제"""
         D = ShiftType
         for e, emp in enumerate(self.employees):
             carry = self.carryover.get(emp.name, {})
@@ -211,49 +211,29 @@ class ShiftScheduler:
                 night = sv[(e, d, D.NIGHT)]
                 off_d = sv[(e, d, D.OFF)]
 
-                # ① 야[d] → 비[d+1]  (당월 내에서만)
                 if d + 1 in self.days:
                     model.AddImplication(night, sv[(e, d + 1, D.OFF)])
-                # d가 마지막날 → 비번은 다음달 이월, 당월 제약 없음
-
-                # ② 야[d] → 휴[d+2]  (당월 내에서만)
                 if d + 2 in self.days:
                     model.AddImplication(night, sv[(e, d + 2, D.HOLIDAY)])
-                # d+2가 다음달 → 휴일은 다음달 이월, 당월 제약 없음
 
-                # ③ 비[d] → 야[d-1]  (비번은 야간 직후에만)
                 if d - 1 in self.days:
                     model.AddImplication(off_d, sv[(e, d - 1, D.NIGHT)])
                 else:
-                    # d=1: 이월 데이터에서 전날 야간 여부 확인
                     if carry.get(0) != D.NIGHT:
                         model.Add(off_d == 0)
 
     def _c3_c4_consecutive_limits(self, model, sv):
-        """
-        C3: 주간 연속 최대 4일
-        C4: 주간 직후 야간 배정 시 주간 최대 3일
-
-        ─ 월 내부 슬라이딩 윈도우 (5일 창) ──────────────────
-          C3: Σ 주[d..d+4]            ≤ 4
-          C4: Σ 주[d..d+3] + 야[d+4] ≤ 4
-
-        ─ 월 경계 (이월 연속 주간 k일 포함) ─────────────────
-          C3: k + Σ 주[1..d]              ≤ 4
-          C4: k + Σ 주[1..d-1] + 야[d]   ≤ 4
-        """
+        """C3: 주간 연속 최대 4일 / C4: 주간 직후 야간 시 주간 최대 3일"""
         D = ShiftType
         for e, emp in enumerate(self.employees):
             k = self._carry_consec_days(emp.name)
 
-            # ── 월 내부 슬라이딩 윈도우 ─────────────────────
             for d in range(1, self.num_days + 1):
                 if d + 4 <= self.num_days:
                     day_window = [sv[(e, d + i, D.DAY)] for i in range(5)]
                     model.Add(sum(day_window) <= 4)                               # C3
                     model.Add(sum(day_window[:4]) + sv[(e, d + 4, D.NIGHT)] <= 4) # C4
 
-            # ── 월 경계 (이월 연속 k일 포함, 첫 5일) ────────
             if k > 0:
                 for d in range(1, min(6, self.num_days + 1)):
                     prefix_day  = [sv[(e, dd, D.DAY)] for dd in range(1, d + 1)]
@@ -270,6 +250,19 @@ class ShiftScheduler:
             night_sum = sum(sv[(e, d, D.NIGHT)] for e in range(self.n_emp))
             model.Add(day_sum   >= 1);  model.Add(day_sum   <= 3)
             model.Add(night_sum >= 1);  model.Add(night_sum <= 2)
+
+    def _c6_equal_holidays(self, model, sv) -> cp_model.IntVar:
+        """💡 C6: 모든 요원의 총 휴일 수(로테이션 휴일 + 지정 휴일)를 완벽히 통일"""
+        D = ShiftType
+        # 한 달 중 모두가 공평하게 쉴 변수 선언
+        target_holidays = model.NewIntVar(0, self.num_days, "target_holidays")
+        
+        for e in range(self.n_emp):
+            # 지정 휴일도 app.py에서 ShiftType.HOLIDAY로 넘어오므로 함께 계산됩니다.
+            emp_holiday_sum = sum(sv[(e, d, D.HOLIDAY)] for d in self.days)
+            model.Add(emp_holiday_sum == target_holidays)
+            
+        return target_holidays
 
     # ═══════════════════════════════════════════════
     # 소프트 제약 (목적함수)
@@ -297,17 +290,17 @@ class ShiftScheduler:
             b_d2 = model.NewBoolVar(f"d2_{d}")
             model.Add(day_s == 2).OnlyEnforceIf(b_d2)
             model.Add(day_s != 2).OnlyEnforceIf(b_d2.Not())
-            terms.append(b_d2 * 5)      # 주간 2명 = 최적 (+5)
+            terms.append(b_d2 * 5)
 
             b_n2 = model.NewBoolVar(f"n2_{d}")
             model.Add(night_s == 2).OnlyEnforceIf(b_n2)
             model.Add(night_s != 2).OnlyEnforceIf(b_n2.Not())
-            terms.append(b_n2 * 5)      # 야간 2명 = 최적 (+5)
+            terms.append(b_n2 * 5)
 
             b_d3 = model.NewBoolVar(f"d3_{d}")
             model.Add(day_s == 3).OnlyEnforceIf(b_d3)
             model.Add(day_s != 3).OnlyEnforceIf(b_d3.Not())
-            terms.append(b_d3 * (-3))   # 주간 3명 = 쏠림 (-3)
+            terms.append(b_d3 * (-3))
 
         return terms
 
