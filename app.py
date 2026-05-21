@@ -61,7 +61,6 @@ SHIFT_MAP = {
     "특": ShiftType.SPECIAL, "교": ShiftType.EDUCATION
 }
 
-# 💡 엔진 결과(ShiftType)를 프리셋용 글자("주", "야" 등)로 역변환하는 매퍼
 REVERSE_SHIFT_MAP = {
     ShiftType.DAY: "주", ShiftType.NIGHT: "야", ShiftType.OFF: "비",
     ShiftType.HOLIDAY: "휴", ShiftType.ANNUAL: "휴", 
@@ -188,7 +187,6 @@ def render_main_page():
 
     with st.sidebar:
         st.markdown("---")
-        # 입력 도중 백업하고 싶을 때 쓰는 기본 프리셋 버튼
         preset_data = {
             "employees": st.session_state.employees,
             "carryover": preset_carryover_for_json
@@ -263,6 +261,7 @@ def render_detail_page():
 
     table_data = []
     
+    # 💡 1. 요일 행 만들기
     day_row = {"이름": "요일"}
     try:
         import holidays
@@ -276,16 +275,20 @@ def render_detail_page():
         is_off = (date_obj.weekday() >= 5) or (date_obj in kr_holidays)
         day_row[f"{d}일"] = f"{wd}(휴)" if is_off and date_obj.weekday() < 5 else wd
             
-    for col in ["주간", "야간", "비번", "휴일", "연가", "특별", "교육", "합계"]:
-        day_row[col] = None
+    # 💡 버그 수정: '자세히 보기'가 켜져 있을 때만 통계 칸을 만듭니다.
+    if show_details:
+        for col in ["주간", "야간", "비번", "휴일", "연가", "특별", "교육", "합계"]:
+            day_row[col] = None
     table_data.append(day_row)
     
+    # 💡 2. 요원별 스케줄 행 만들기
     for emp in res.employees:
         row = {"이름": emp.name}
         for d in month_days:
             shift = res.get_shift(emp.name, d)
             row[f"{d}일"] = shift.value if shift else ""
             
+        # 자세히 보기가 켜져 있을 때만 통계 데이터 입력
         if show_details:
             stats = res.get_stats(emp.name)
             row["주간"] = stats['주간']
@@ -298,6 +301,7 @@ def render_detail_page():
             row["합계"] = sum([stats[k] for k in ['주간', '야간', '비번', '휴일', '연가', '특별', '교육']])
         table_data.append(row)
 
+    # 💡 3. 하단 인원 합계 행 만들기 (자세히 보기가 켜져 있을 때만)
     if show_details:
         day_count_row = {"이름": "주간인원"}
         night_count_row = {"이름": "야간인원"}
@@ -318,8 +322,10 @@ def render_detail_page():
             config[f"{d}일"] = st.column_config.SelectboxColumn(
                 f"{d}일", options=["주", "야", "비", "휴", "연", "특", "교", "월", "화", "수", "목", "금", "토", "일", "월(휴)", "화(휴)", "수(휴)", "목(휴)", "금(휴)"]
             )
-        for col in ["주간", "야간", "비번", "휴일", "연가", "특별", "교육", "합계"]:
-            config[col] = st.column_config.TextColumn(col, disabled=True)
+        # 자세히 보기가 켜져 있을 때만 에디터 설정을 입힙니다
+        if show_details:
+            for col in ["주간", "야간", "비번", "휴일", "연가", "특별", "교육", "합계"]:
+                config[col] = st.column_config.TextColumn(col, disabled=True)
 
         edited_df = st.data_editor(df, column_config=config, use_container_width=True)
         
@@ -363,11 +369,9 @@ def render_detail_page():
                 st.session_state.page = 'individual'
                 st.rerun()
 
-    # 💡 하단 다운로드 구역: 엑셀 다운로드와 [다음 달 프리셋 저장]을 나란히 배치
     st.divider()
     dl_c1, dl_c2 = st.columns(2)
     
-    # 1. 기존 엑셀 다운로드
     buffer = io.BytesIO()
     with pd.ExcelWriter(buffer, engine='openpyxl') as writer:
         df.reset_index().to_excel(writer, index=False, sheet_name=f"{res.solution_label}안")
@@ -378,20 +382,16 @@ def render_detail_page():
         use_container_width=True
     )
 
-    # 2. 🌟 핵심 추가: 다음 달용 스마트 프리셋 생성 및 다운로드 버튼
-    # 선택된 대안(res)에서 마지막 4일 근무 형태를 쏙 빼서 다음 달 이월 데이터로 매핑
     next_month_carryover = {}
     next_month_employees = []
     
     for emp in res.employees:
-        # 마지막 4일 추출 및 역변환 (주, 야, 비, 휴)
         next_month_carryover[emp.name] = {
             "-3": REVERSE_SHIFT_MAP.get(res.get_shift(emp.name, num_days - 3), "휴"),
             "-2": REVERSE_SHIFT_MAP.get(res.get_shift(emp.name, num_days - 2), "휴"),
             "-1": REVERSE_SHIFT_MAP.get(res.get_shift(emp.name, num_days - 1), "휴"),
             "0": REVERSE_SHIFT_MAP.get(res.get_shift(emp.name, num_days), "휴")
         }
-        # 인원 정보 구성 (이름/선호도는 유지하되 새 달을 시작하므로 고정 일정 휴가는 깔끔하게 청소)
         next_month_employees.append({
             "name": emp.name,
             "prefer_day": emp.prefer_day,
@@ -405,7 +405,6 @@ def render_detail_page():
     }
     next_json_str = json.dumps(next_month_preset, ensure_ascii=False, indent=2)
     
-    # 다음 달 계산 (예: 12월이면 내년 1월로 넘어가게 처리)
     next_m = month + 1 if month < 12 else 1
     next_y = year if month < 12 else year + 1
     
