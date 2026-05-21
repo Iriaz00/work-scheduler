@@ -1,7 +1,7 @@
 from __future__ import annotations
 from typing import Dict, List, Optional, Tuple
 import calendar as cal_module
-import datetime # 💡 날짜 계산을 위해 추가
+import datetime
 
 from ortools.sat.python import cp_model
 from models import ALL_SHIFTS, Employee, FixedSchedule, MonthSchedule, ShiftType
@@ -13,11 +13,12 @@ class ShiftScheduler:
 
     [하드 제약]
       C1. 1인 1일 1근무 유형
-      C2. 야-비-휴 세트 강제  ※ 월말 야간은 비·휴를 다음달 이월로 처리
+      C2. 야-비-휴 세트 강제
       C3. 주간 연속 최대 4일 (이월 포함)
       C4. 주간→야간 전환 시 주간 최대 3일 (이월 포함)
       C5. 일일 주간 1~3명, 야간 1~2명
-      C6. 모든 요원의 총 휴일 수 = 해당 월의 [주말 + 공휴일] 수로 고정 💡 (핵심 수정)
+      C6. 모든 요원의 총 휴일 수 = 해당 월의 [주말 + 공휴일] 수로 고정
+      C7. [추가] 연가/특휴/교육은 사전 신청된(고정 일정) 날에만 배정
 
     [소프트 제약 - 목적함수]
       S1. 주간/야간 선호도 반영 (+3점)
@@ -75,9 +76,7 @@ class ShiftScheduler:
         return cnt
 
     def _preprocess_carryover(self):
-        """
-        전월 야간 세트가 당월 초에 걸치는 경우 고정 배정 자동 추가
-        """
+        """전월 야간 세트가 당월 초에 걸치는 경우 고정 배정 자동 추가"""
         for emp in self.employees:
             existing = {fs.day for fs in emp.fixed_schedules}
             c0  = self._carry(emp.name,  0)
@@ -99,7 +98,6 @@ class ShiftScheduler:
     # ═══════════════════════════════════════════════
 
     def solve(self) -> List[MonthSchedule]:
-        """A/B/C안 순서대로 최적해 탐색 후 반환"""
         results: List[MonthSchedule] = []
         labels = ['A', 'B', 'C', 'D', 'E']
 
@@ -115,10 +113,6 @@ class ShiftScheduler:
 
         return results
 
-    # ═══════════════════════════════════════════════
-    # 단일 해 탐색
-    # ═══════════════════════════════════════════════
-
     def _solve_once(
         self,
         prev_results: List[MonthSchedule],
@@ -132,14 +126,11 @@ class ShiftScheduler:
         self._c2_night_sequence(model, sv)
         self._c3_c4_consecutive_limits(model, sv)
         self._c5_daily_staffing(model, sv)
-        
-        # 💡 [핵심 수정] C6: 이번 달의 실제 주말+공휴일 수를 계산해 하드 제약으로 강제 고정
         self._c6_equal_holidays(model, sv)
 
         for p in prev_results:
             self._exclude(model, sv, p)
 
-        # 목적함수 기본 항들 가져오기
         obj_terms = self._objective(model, sv)
         model.Maximize(cp_model.LinearExpr.Sum(obj_terms))
 
@@ -154,7 +145,6 @@ class ShiftScheduler:
         if status not in (cp_model.OPTIMAL, cp_model.FEASIBLE):
             return None
 
-        # 결과 추출
         schedule: Dict[str, Dict[int, ShiftType]] = {}
         for e, emp in enumerate(self.employees):
             schedule[emp.name] = {}
@@ -171,18 +161,28 @@ class ShiftScheduler:
         )
 
     # ═══════════════════════════════════════════════
-    # 변수 생성
+    # 변수 생성 (💡 핵심 버그 수정 영역)
     # ═══════════════════════════════════════════════
 
     def _create_vars(self, model: cp_model.CpModel) -> Dict:
         sv: Dict[Tuple, cp_model.IntVar] = {}
+        
+        # 💡 사용자가 지정하지 않으면 AI가 함부로 넣을 수 없는 특수 휴가들
+        RESTRICTED_SHIFTS = [ShiftType.ANNUAL, ShiftType.SPECIAL, ShiftType.EDUCATION]
+        
         for e, emp in enumerate(self.employees):
             for d in self.days:
                 fixed = emp.get_fixed_shift(d)
                 for s in ALL_SHIFTS:
                     var = model.NewBoolVar(f"e{e}_d{d}_{s.value}")
                     if fixed is not None:
+                        # 고정 일정이 있는 날은 무조건 해당 근무로 고정
                         model.Add(var == (1 if s == fixed else 0))
+                    else:
+                        # 💡 고정 일정이 없는 빈 날짜에는 특수 휴가를 AI 마음대로 넣지 못하게 원천 차단!
+                        if s in RESTRICTED_SHIFTS:
+                            model.Add(var == 0)
+                            
                     sv[(e, d, s)] = var
         return sv
 
@@ -191,13 +191,11 @@ class ShiftScheduler:
     # ═══════════════════════════════════════════════
 
     def _c1_one_shift_per_day(self, model, sv):
-        """C1: 1인 1일 정확히 1개 근무 유형"""
         for e in range(self.n_emp):
             for d in self.days:
                 model.AddExactlyOne([sv[(e, d, s)] for s in ALL_SHIFTS])
 
     def _c2_night_sequence(self, model, sv):
-        """C2: 야-비-휴 세트 강제"""
         D = ShiftType
         for e, emp in enumerate(self.employees):
             carry = self.carryover.get(emp.name, {})
@@ -218,7 +216,6 @@ class ShiftScheduler:
                         model.Add(off_d == 0)
 
     def _c3_c4_consecutive_limits(self, model, sv):
-        """C3: 주간 연속 최대 4일 / C4: 주간 직후 야간 시 주간 최대 3일"""
         D = ShiftType
         for e, emp in enumerate(self.employees):
             k = self._carry_consec_days(emp.name)
@@ -226,19 +223,17 @@ class ShiftScheduler:
             for d in range(1, self.num_days + 1):
                 if d + 4 <= self.num_days:
                     day_window = [sv[(e, d + i, D.DAY)] for i in range(5)]
-                    model.Add(sum(day_window) <= 4)                               # C3
-                    model.Add(sum(day_window[:4]) + sv[(e, d + 4, D.NIGHT)] <= 4) # C4
+                    model.Add(sum(day_window) <= 4)
+                    model.Add(sum(day_window[:4]) + sv[(e, d + 4, D.NIGHT)] <= 4)
 
             if k > 0:
                 for d in range(1, min(6, self.num_days + 1)):
                     prefix_day  = [sv[(e, dd, D.DAY)] for dd in range(1, d + 1)]
                     prefix_prev = [sv[(e, dd, D.DAY)] for dd in range(1, d)]
-
-                    model.Add(k + sum(prefix_day)  <= 4)                          # C3
-                    model.Add(k + sum(prefix_prev) + sv[(e, d, D.NIGHT)] <= 4)   # C4
+                    model.Add(k + sum(prefix_day)  <= 4)
+                    model.Add(k + sum(prefix_prev) + sv[(e, d, D.NIGHT)] <= 4)
 
     def _c5_daily_staffing(self, model, sv):
-        """C5: 일일 주간 1~3명, 야간 1~2명"""
         D = ShiftType
         for d in self.days:
             day_sum   = sum(sv[(e, d, D.DAY)]   for e in range(self.n_emp))
@@ -247,22 +242,18 @@ class ShiftScheduler:
             model.Add(night_sum >= 1);  model.Add(night_sum <= 2)
 
     def _c6_equal_holidays(self, model, sv):
-        """💡 C6: 이번 달의 실제 [주말 + 공휴일] 총 일수를 계산하여 모든 요원의 휴일(HOLIDAY) 일수로 완벽 고정"""
         try:
             import holidays
             kr_holidays = holidays.KR(years=self.year)
         except ImportError:
             kr_holidays = {}
 
-        # 1. 이번 달 달력의 총 빨간 날(토, 일, 공휴일) 개수 자동 세기
         target_holidays = 0
         for d in self.days:
             date_obj = datetime.date(self.year, self.month, d)
-            # 주말(토, 일)이거나 대한민국 법정 공휴일인 경우
             if date_obj.weekday() >= 5 or date_obj in kr_holidays:
                 target_holidays += 1
 
-        # 2. 모든 요원의 순수 로테이션 휴일(휴) 총합이 정확히 이 숫자가 되도록 강제
         D = ShiftType
         for e in range(self.n_emp):
             emp_holiday_sum = sum(sv[(e, d, D.HOLIDAY)] for d in self.days)
@@ -276,7 +267,6 @@ class ShiftScheduler:
         D     = ShiftType
         terms = []
 
-        # S1: 선호도 반영
         for e, emp in enumerate(self.employees):
             for d in self.days:
                 if emp.prefer_day:
@@ -284,7 +274,6 @@ class ShiftScheduler:
                 if emp.prefer_night:
                     terms.append(sv[(e, d, D.NIGHT)] * 3)
 
-        # S2·S3: 일일 인원 최적화
         for d in self.days:
             day_s   = model.NewIntVar(0, self.n_emp, f"ds_{d}")
             night_s = model.NewIntVar(0, self.n_emp, f"ns_{d}")
@@ -308,12 +297,7 @@ class ShiftScheduler:
 
         return terms
 
-    # ═══════════════════════════════════════════════
-    # 이전 해 배제
-    # ═══════════════════════════════════════════════
-
     def _exclude(self, model, sv, prev: MonthSchedule):
-        """이전 해와 최소 3개의 주간/야간 배정이 달라야 함"""
         same = []
         for e, emp in enumerate(self.employees):
             for d in self.days:
