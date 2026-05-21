@@ -1,6 +1,7 @@
 from __future__ import annotations
 from typing import Dict, List, Optional, Tuple
 import calendar as cal_module
+import datetime # 💡 날짜 계산을 위해 추가
 
 from ortools.sat.python import cp_model
 from models import ALL_SHIFTS, Employee, FixedSchedule, MonthSchedule, ShiftType
@@ -16,7 +17,7 @@ class ShiftScheduler:
       C3. 주간 연속 최대 4일 (이월 포함)
       C4. 주간→야간 전환 시 주간 최대 3일 (이월 포함)
       C5. 일일 주간 1~3명, 야간 1~2명
-      C6. 모든 요원의 총 휴일 수(로테이션 휴일 + 지정 휴일) 동일 강제 💡 (새로 추가)
+      C6. 모든 요원의 총 휴일 수 = 해당 월의 [주말 + 공휴일] 수로 고정 💡 (핵심 수정)
 
     [소프트 제약 - 목적함수]
       S1. 주간/야간 선호도 반영 (+3점)
@@ -76,9 +77,6 @@ class ShiftScheduler:
     def _preprocess_carryover(self):
         """
         전월 야간 세트가 당월 초에 걸치는 경우 고정 배정 자동 추가
-
-          전월 day 0  = 야  →  당월 day 1 = 비,  day 2 = 휴
-          전월 day -1 = 야  →  당월 day 1 = 휴   (day 0 비번은 이미 이월)
         """
         for emp in self.employees:
             existing = {fs.day for fs in emp.fixed_schedules}
@@ -135,17 +133,14 @@ class ShiftScheduler:
         self._c3_c4_consecutive_limits(model, sv)
         self._c5_daily_staffing(model, sv)
         
-        # 💡 [핵심 수정] C6: 모든 요원의 총 휴일 수를 동일하게 제한
-        target_h = self._c6_equal_holidays(model, sv)
+        # 💡 [핵심 수정] C6: 이번 달의 실제 주말+공휴일 수를 계산해 하드 제약으로 강제 고정
+        self._c6_equal_holidays(model, sv)
 
         for p in prev_results:
             self._exclude(model, sv, p)
 
         # 목적함수 기본 항들 가져오기
         obj_terms = self._objective(model, sv)
-        # 💡 공평한 상태에서 최대한 많이 쉴 수 있도록 휴일 수 가중치(+10점) 반영
-        obj_terms.append(target_h * 10)
-
         model.Maximize(cp_model.LinearExpr.Sum(obj_terms))
 
         solver = cp_model.CpSolver()
@@ -251,18 +246,27 @@ class ShiftScheduler:
             model.Add(day_sum   >= 1);  model.Add(day_sum   <= 3)
             model.Add(night_sum >= 1);  model.Add(night_sum <= 2)
 
-    def _c6_equal_holidays(self, model, sv) -> cp_model.IntVar:
-        """💡 C6: 모든 요원의 총 휴일 수(로테이션 휴일 + 지정 휴일)를 완벽히 통일"""
+    def _c6_equal_holidays(self, model, sv):
+        """💡 C6: 이번 달의 실제 [주말 + 공휴일] 총 일수를 계산하여 모든 요원의 휴일(HOLIDAY) 일수로 완벽 고정"""
+        try:
+            import holidays
+            kr_holidays = holidays.KR(years=self.year)
+        except ImportError:
+            kr_holidays = {}
+
+        # 1. 이번 달 달력의 총 빨간 날(토, 일, 공휴일) 개수 자동 세기
+        target_holidays = 0
+        for d in self.days:
+            date_obj = datetime.date(self.year, self.month, d)
+            # 주말(토, 일)이거나 대한민국 법정 공휴일인 경우
+            if date_obj.weekday() >= 5 or date_obj in kr_holidays:
+                target_holidays += 1
+
+        # 2. 모든 요원의 순수 로테이션 휴일(휴) 총합이 정확히 이 숫자가 되도록 강제
         D = ShiftType
-        # 한 달 중 모두가 공평하게 쉴 변수 선언
-        target_holidays = model.NewIntVar(0, self.num_days, "target_holidays")
-        
         for e in range(self.n_emp):
-            # 지정 휴일도 app.py에서 ShiftType.HOLIDAY로 넘어오므로 함께 계산됩니다.
             emp_holiday_sum = sum(sv[(e, d, D.HOLIDAY)] for d in self.days)
             model.Add(emp_holiday_sum == target_holidays)
-            
-        return target_holidays
 
     # ═══════════════════════════════════════════════
     # 소프트 제약 (목적함수)
