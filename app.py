@@ -44,7 +44,7 @@ cols[4].markdown("**삭제**")
 
 for idx, emp in enumerate(st.session_state.employees):
     c1, c2, c3, c4, c5 = st.columns([2, 1, 1, 4, 1])
-    emp['name'] = c1.text_input(f"이름 {idx}", value=emp['name'], label_visibility="collapsed", placeholder="이 입력")
+    emp['name'] = c1.text_input(f"이름 {idx}", value=emp['name'], label_visibility="collapsed", placeholder="이름 입력")
     emp['prefer_day'] = c2.checkbox(f"주 {idx}", value=emp['prefer_day'], label_visibility="collapsed")
     emp['prefer_night'] = c3.checkbox(f"야 {idx}", value=emp['prefer_night'], label_visibility="collapsed")
     emp['fixed'] = c4.text_input(f"일정 {idx}", value=emp['fixed'], label_visibility="collapsed", placeholder="날짜:항목 (쉼표 구분)")
