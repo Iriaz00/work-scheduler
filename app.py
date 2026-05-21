@@ -34,7 +34,6 @@ if 'employees' not in st.session_state:
     st.session_state.employees = []
 
 def add_employee():
-    # 💡 지정 휴일 추가 및 딕셔너리 구조 적용
     st.session_state.employees.append({
         "name": "", 
         "prefer_day": True, 
@@ -59,7 +58,7 @@ for idx, emp in enumerate(st.session_state.employees):
     emp['prefer_day'] = c2.checkbox(f"주 {idx}", value=emp['prefer_day'], label_visibility="collapsed")
     emp['prefer_night'] = c3.checkbox(f"야 {idx}", value=emp['prefer_night'], label_visibility="collapsed")
     
-    # 💡 이전 텍스트 데이터 충돌(에러) 완전 차단 로직
+    # 캐시 충돌 방지 및 안전장치
     old_fixed = emp.get('fixed', {})
     if isinstance(old_fixed, str):
         emp['fixed'] = {"연가": [], "특별": [], "교육": [], "휴일": []}
@@ -113,7 +112,7 @@ if st.button("🚀 근무표 만들기", type="primary", use_container_width=Tru
     else:
         final_emps = []
         for e in st.session_state.employees:
-            if not e['name'].strip(): continue # 이름 없으면 건너뜀
+            if not e['name'].strip(): continue
             
             fixed_list = []
             for d in e['fixed']['휴일']: fixed_list.append(FixedSchedule(d, ShiftType.HOLIDAY))
@@ -132,33 +131,35 @@ if st.button("🚀 근무표 만들기", type="primary", use_container_width=Tru
             else:
                 st.success("🎉 근무표 생성이 완료되었습니다! 아래 탭에서 대안을 확인하세요.")
                 
-                # 💡 대안별 탭(Tab) 생성
                 tabs = st.tabs([f"{res.solution_label}안 (점수: {res.score})" for res in results])
                 
                 for idx, res in enumerate(results):
                     with tabs[idx]:
-                        # 표(DataFrame) 구성을 위한 데이터 만들기
                         table_data = []
                         for emp in res.employees:
                             row = {"이름": emp.name}
                             
-                            # 날짜별 근무 입력
+                            # 날짜별 근무 데이터
                             for d in month_days:
                                 shift = res.get_shift(emp.name, d)
                                 row[f"{d}일"] = shift.value if shift else ""
                                 
-                            # 통계 입력
+                            # 💡 요원별 확장 통계 컬럼 반영
                             stats = res.get_stats(emp.name)
-                            row["주간합"] = stats['주간']
-                            row["야간합"] = stats['야간']
-                            row["총휴일"] = stats['총휴일']
+                            row["주간"] = stats['주간']
+                            row["야간"] = stats['야간']
+                            row["비번"] = stats['비번']
+                            row["휴일"] = stats['휴일']
+                            row["연가"] = stats['연가']
+                            row["특별"] = stats['특별']
+                            row["교육"] = stats['교육']
+                            row["합계"] = stats['근무일'] # 실제 일한 일수 (주간 + 야간)
                             table_data.append(row)
                             
-                        # 판다스 데이터프레임으로 변환하여 화면에 출력
                         df = pd.DataFrame(table_data)
                         st.dataframe(df, use_container_width=True, hide_index=True)
                         
-                        # 엑셀 다운로드 기능
+                        # 엑셀 다운로드
                         buffer = io.BytesIO()
                         with pd.ExcelWriter(buffer, engine='openpyxl') as writer:
                             df.to_excel(writer, index=False, sheet_name=f"{res.solution_label}안")
