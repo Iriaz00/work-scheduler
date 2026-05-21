@@ -139,12 +139,12 @@ if st.button("🚀 근무표 만들기", type="primary", use_container_width=Tru
                         for emp in res.employees:
                             row = {"이름": emp.name}
                             
-                            # 날짜별 근무 데이터
+                            # 개인별 일일 근무 데이터
                             for d in month_days:
                                 shift = res.get_shift(emp.name, d)
                                 row[f"{d}일"] = shift.value if shift else ""
                                 
-                            # 💡 요원별 확장 통계 컬럼 반영
+                            # 요원별 통계 컬럼
                             stats = res.get_stats(emp.name)
                             row["주간"] = stats['주간']
                             row["야간"] = stats['야간']
@@ -153,9 +153,28 @@ if st.button("🚀 근무표 만들기", type="primary", use_container_width=Tru
                             row["연가"] = stats['연가']
                             row["특별"] = stats['특별']
                             row["교육"] = stats['교육']
-                            row["합계"] = stats['근무일'] # 실제 일한 일수 (주간 + 야간)
+                            row["합계"] = stats['근무일']
                             table_data.append(row)
                             
+                        # 💡 추가: 하단 일일 인원 합계 계산
+                        day_count_row = {"이름": "주간 근무인원"}
+                        night_count_row = {"이름": "야간 근무인원"}
+                        
+                        for d in month_days:
+                            day_count = sum(1 for emp in res.employees if res.get_shift(emp.name, d) == ShiftType.DAY)
+                            night_count = sum(1 for emp in res.employees if res.get_shift(emp.name, d) == ShiftType.NIGHT)
+                            day_count_row[f"{d}일"] = day_count
+                            night_count_row[f"{d}일"] = night_count
+                            
+                        # 합계 행의 통계 빈칸 처리
+                        for col in ["주간", "야간", "비번", "휴일", "연가", "특별", "교육", "합계"]:
+                            day_count_row[col] = ""
+                            night_count_row[col] = ""
+                            
+                        table_data.append(day_count_row)
+                        table_data.append(night_count_row)
+                            
+                        # 판다스 데이터프레임 렌더링
                         df = pd.DataFrame(table_data)
                         st.dataframe(df, use_container_width=True, hide_index=True)
                         
