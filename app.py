@@ -61,6 +61,13 @@ SHIFT_MAP = {
     "특": ShiftType.SPECIAL, "교": ShiftType.EDUCATION
 }
 
+# 💡 엔진 결과(ShiftType)를 프리셋용 글자("주", "야" 등)로 역변환하는 매퍼
+REVERSE_SHIFT_MAP = {
+    ShiftType.DAY: "주", ShiftType.NIGHT: "야", ShiftType.OFF: "비",
+    ShiftType.HOLIDAY: "휴", ShiftType.ANNUAL: "휴", 
+    ShiftType.SPECIAL: "휴", ShiftType.EDUCATION: "휴"
+}
+
 # ==========================================
 # 📺 화면 1: 메인 설정 및 근무표 생성 화면
 # ==========================================
@@ -82,24 +89,21 @@ def render_main_page():
         st.session_state.num_solutions = num_solutions
         st.session_state.time_limit = time_limit
 
-        # 💡 프리셋(데이터 저장/불러오기) 기능 추가 구역
         st.markdown("---")
         st.header("💾 인원 및 설정 데이터 관리")
         
-        # 1. 불러오기 기능
-        uploaded_file = st.file_uploader("📂 백업 파일(.json) 불러오기", type=["json"])
+        uploaded_file = st.file_uploader("📂 설정 파일(.json) 불러오기", type=["json"])
         if uploaded_file is not None:
             if st.button("데이터 적용하기", use_container_width=True):
                 try:
                     data = json.load(uploaded_file)
                     st.session_state.employees = data.get("employees", [])
                     st.session_state.preset_carryover = data.get("carryover", {})
-                    st.success("✅ 데이터를 성공적으로 불러왔습니다!")
+                    st.success("✅ 설정을 성공적으로 불러왔습니다!")
                     st.rerun()
                 except Exception as e:
                     st.error("파일을 읽는 중 오류가 발생했습니다.")
         
-        # 2. 초기화 기능
         if st.button("🗑️ 모든 인원 초기화", use_container_width=True):
             st.session_state.employees = []
             st.session_state.preset_carryover = {}
@@ -158,7 +162,7 @@ def render_main_page():
 
     st.header("📋 이월 데이터 (전달 마지막 4일)")
     carryover = {}
-    preset_carryover_for_json = {} # 다운로드용 데이터 수집 딕셔너리
+    preset_carryover_for_json = {}
     
     if st.session_state.employees:
         for emp in st.session_state.employees:
@@ -169,7 +173,6 @@ def render_main_page():
                 preset_carryover_for_json[emp['name']] = {}
                 
                 for i, d in enumerate([-3, -2, -1, 0]):
-                    # 프리셋에 저장된 값이 있다면 불러와서 적용, 없으면 기본값 "휴"
                     default_val = st.session_state.preset_carryover.get(emp['name'], {}).get(str(d), "휴")
                     try:
                         default_idx = ["주", "야", "비", "휴"].index(default_val)
@@ -179,22 +182,22 @@ def render_main_page():
                     val = r_cols[i].selectbox(f"{d}일 근무", ["주", "야", "비", "휴"], index=default_idx, key=f"carry_{emp['name']}_{d}")
                     
                     carryover[emp['name']][d] = SHIFT_MAP[val]
-                    preset_carryover_for_json[emp['name']][str(d)] = val # JSON은 문자열 키(Key)만 지원함
+                    preset_carryover_for_json[emp['name']][str(d)] = val
                     
         st.session_state.carryover_data = carryover
 
-    # 💡 3. 프리셋 다운로드 버튼 (사이드바 하단 배치)
     with st.sidebar:
         st.markdown("---")
+        # 입력 도중 백업하고 싶을 때 쓰는 기본 프리셋 버튼
         preset_data = {
             "employees": st.session_state.employees,
             "carryover": preset_carryover_for_json
         }
         json_str = json.dumps(preset_data, ensure_ascii=False, indent=2)
         st.download_button(
-            label="📥 현재 세팅 파일(Preset) 저장하기",
+            label="📥 현재 입력 내용 백업하기",
             data=json_str,
-            file_name=f"근무설정_{year}년_{month}월.json",
+            file_name=f"근무설정_백업.json",
             mime="application/json",
             use_container_width=True
         )
@@ -215,7 +218,6 @@ def render_main_page():
                 st.session_state.page = 'detail'
                 st.rerun()
 
-# 스케줄러 구동 공통 함수
 def run_scheduling_engine():
     year = st.session_state.current_year
     month = st.session_state.current_month
@@ -257,7 +259,7 @@ def render_detail_page():
     show_details = ctrl1.toggle("📊 자세히 보기 (통계 및 합계 표시)", value=False)
     edit_mode = ctrl2.toggle("✏️ 수동 수정 모드", value=False)
     
-    st.info("💡 수정 모드를 켜면 표를 직접 스케줄을 변경할 수 있습니다. 아래 '요원별 상세 달력' 버튼을 누르면 인물별 캘린더 화면으로 이동합니다.")
+    st.info("💡 수정 모드를 켜면 표를 직접 수정할 수 있습니다. 마음에 드는 대안을 찾으셨다면 하단의 '다음 달 설정 파일 저장'을 눌러 프리셋을 챙겨가세요.")
 
     table_data = []
     
@@ -361,14 +363,59 @@ def render_detail_page():
                 st.session_state.page = 'individual'
                 st.rerun()
 
+    # 💡 하단 다운로드 구역: 엑셀 다운로드와 [다음 달 프리셋 저장]을 나란히 배치
     st.divider()
+    dl_c1, dl_c2 = st.columns(2)
+    
+    # 1. 기존 엑셀 다운로드
     buffer = io.BytesIO()
     with pd.ExcelWriter(buffer, engine='openpyxl') as writer:
         df.reset_index().to_excel(writer, index=False, sheet_name=f"{res.solution_label}안")
-    st.download_button(
-        label="📥 현재 스케줄 엑셀(Excel) 다운로드", data=buffer.getvalue(),
+    dl_c1.download_button(
+        label="📥 확정 근무표 엑셀(Excel) 다운로드", data=buffer.getvalue(),
         file_name=f"근무표_{year}년_{month}월_{res.solution_label}안.xlsx",
-        mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+        mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+        use_container_width=True
+    )
+
+    # 2. 🌟 핵심 추가: 다음 달용 스마트 프리셋 생성 및 다운로드 버튼
+    # 선택된 대안(res)에서 마지막 4일 근무 형태를 쏙 빼서 다음 달 이월 데이터로 매핑
+    next_month_carryover = {}
+    next_month_employees = []
+    
+    for emp in res.employees:
+        # 마지막 4일 추출 및 역변환 (주, 야, 비, 휴)
+        next_month_carryover[emp.name] = {
+            "-3": REVERSE_SHIFT_MAP.get(res.get_shift(emp.name, num_days - 3), "휴"),
+            "-2": REVERSE_SHIFT_MAP.get(res.get_shift(emp.name, num_days - 2), "휴"),
+            "-1": REVERSE_SHIFT_MAP.get(res.get_shift(emp.name, num_days - 1), "휴"),
+            "0": REVERSE_SHIFT_MAP.get(res.get_shift(emp.name, num_days), "휴")
+        }
+        # 인원 정보 구성 (이름/선호도는 유지하되 새 달을 시작하므로 고정 일정 휴가는 깔끔하게 청소)
+        next_month_employees.append({
+            "name": emp.name,
+            "prefer_day": emp.prefer_day,
+            "prefer_night": emp.prefer_night,
+            "fixed": {"연가": [], "특별": [], "교육": [], "휴일": []}
+        })
+        
+    next_month_preset = {
+        "employees": next_month_employees,
+        "carryover": next_month_carryover
+    }
+    next_json_str = json.dumps(next_month_preset, ensure_ascii=False, indent=2)
+    
+    # 다음 달 계산 (예: 12월이면 내년 1월로 넘어가게 처리)
+    next_m = month + 1 if month < 12 else 1
+    next_y = year if month < 12 else year + 1
+    
+    dl_c2.download_button(
+        label=f"💾 다음 달({next_m}월) 세팅용 프리셋 파일 저장",
+        data=next_json_str,
+        file_name=f"근무설정_익월용_{next_y}년_{next_m}월.json",
+        mime="application/json",
+        type="primary",
+        use_container_width=True
     )
 
 # ==========================================
