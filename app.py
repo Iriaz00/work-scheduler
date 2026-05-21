@@ -160,7 +160,7 @@ def render_main_page():
                 st.session_state.page = 'detail'
                 st.rerun()
 
-# 스케줄러 구동 공통 함수 (재생성 시에도 활용)
+# 스케줄러 구동 공통 함수
 def run_scheduling_engine():
     year = st.session_state.current_year
     month = st.session_state.current_month
@@ -206,7 +206,6 @@ def render_detail_page():
 
     table_data = []
     
-    # 요일 행 생성
     day_row = {"이름": "요일"}
     try:
         import holidays
@@ -224,7 +223,6 @@ def render_detail_page():
         day_row[col] = None
     table_data.append(day_row)
     
-    # 직원 스케줄 생성
     for emp in res.employees:
         row = {"이름": emp.name}
         for d in month_days:
@@ -299,9 +297,12 @@ def render_detail_page():
     
     emp_names = [emp.name for emp in res.employees]
     if emp_names:
-        btn_cols = st.columns(min(8, len(emp_names)))
+        # 💡 무조건 '2줄'로 배치하기 위해 열의 개수를 동적으로 계산 (총 인원의 절반 올림값)
+        cols_per_row = max(1, (len(emp_names) + 1) // 2)
+        btn_cols = st.columns(cols_per_row)
         for idx, name in enumerate(emp_names):
-            col_target = btn_cols[idx % 8]
+            # 인덱스를 통해 앞의 절반은 첫 번째 줄, 뒤의 절반은 두 번째 줄로 자동 배치됩니다.
+            col_target = btn_cols[idx % cols_per_row]
             if col_target.button(f"👤 {name}", use_container_width=True, key=f"jump_{name}"):
                 st.session_state.selected_emp_name = name
                 st.session_state.page = 'individual'
@@ -387,7 +388,6 @@ def render_individual_page():
     h_cols = st.columns(7)
     for i, h in enumerate(headers):
         color = "#FF4B4B" if i == 0 else ("#0070C0" if i == 6 else "white")
-        # 💡 에러 원인 수정: unsafe_allow_html=True 로 변경
         h_cols[i].markdown(f"<div style='text-align: center; background-color: #31333F; color: {color}; padding: 5px; font-weight: bold; border-radius: 4px;'>{h}</div>", unsafe_allow_html=True)
 
     for week_idx in range(len(cal_days) // 7):
@@ -396,7 +396,6 @@ def render_individual_page():
         
         for day_pos, d in enumerate(week_days):
             if d is None:
-                # 💡 에러 원인 수정: unsafe_allow_html=True 로 변경
                 w_cols[day_pos].markdown("<div style='min-height: 80px;'></div>", unsafe_allow_html=True)
             else:
                 date_obj = datetime.date(year, month, d)
@@ -433,7 +432,6 @@ def render_individual_page():
                     </div>
                 </div>
                 """
-                # 💡 에러 원인 수정: unsafe_allow_html=True 로 변경
                 w_cols[day_pos].markdown(html_box, unsafe_allow_html=True)
 
 # --- 메인 라우터 앱 흐름 기동 ---
