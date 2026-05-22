@@ -6,26 +6,7 @@ import datetime
 from ortools.sat.python import cp_model
 from models import ALL_SHIFTS, Employee, FixedSchedule, MonthSchedule, ShiftType
 
-
 class ShiftScheduler:
-    """
-    OR-Tools CP-SAT 기반 교대 근무표 자동 생성 엔진
-
-    [하드 제약]
-      C1. 1인 1일 1근무 유형
-      C2. 야-비-휴 세트 강제
-      C3. 주간 연속 최대 4일 (이월 포함)
-      C4. 주간→야간 전환 시 주간 최대 3일 (이월 포함)
-      C5. 일일 주간 1~3명, 야간 1~2명
-      C6. 모든 요원의 총 휴일 수 = 해당 월의 [주말 + 공휴일] 수로 고정
-      C7. [추가] 연가/특휴/교육은 사전 신청된(고정 일정) 날에만 배정
-
-    [소프트 제약 - 목적함수]
-      S1. 주간/야간 선호도 반영 (+3점)
-      S2. 주간 2명·야간 2명 배정 시 최적 (+5점)
-      S3. 주간 3명 쏠림 페널티 (-3점)
-    """
-
     _STATUS = {
         cp_model.OPTIMAL:    "✅ 최적해",
         cp_model.FEASIBLE:   "⚠️  가능해(비최적)",
@@ -58,25 +39,20 @@ class ShiftScheduler:
 
         self._preprocess_carryover()
 
-    # ═══════════════════════════════════════════════
-    # 이월(Carry-over) 전처리
-    # ═══════════════════════════════════════════════
-
     def _carry(self, emp_name: str, day: int) -> Optional[ShiftType]:
         return self.carryover.get(emp_name, {}).get(day)
 
     def _carry_consec_days(self, emp_name: str) -> int:
-        """전월 말미 연속 주간 근무 일수 (최대 4)"""
+        """💡 전월 말미 연속 근무 체크 시 '교육'도 '주간' 피로도로 합산합니다."""
         cnt = 0
         for d in (0, -1, -2, -3):
-            if self._carry(emp_name, d) == ShiftType.DAY:
+            if self._carry(emp_name, d) in (ShiftType.DAY, ShiftType.EDUCATION):
                 cnt += 1
             else:
                 break
         return cnt
 
     def _preprocess_carryover(self):
-        """전월 야간 세트가 당월 초에 걸치는 경우 고정 배정 자동 추가"""
         for emp in self.employees:
             existing = {fs.day for fs in emp.fixed_schedules}
             c0  = self._carry(emp.name,  0)
@@ -92,10 +68,6 @@ class ShiftScheduler:
                 fix(2, ShiftType.HOLIDAY)
             elif cm1 == ShiftType.NIGHT:
                 fix(1, ShiftType.HOLIDAY)
-
-    # ═══════════════════════════════════════════════
-    # 공개 인터페이스
-    # ═══════════════════════════════════════════════
 
     def solve(self) -> List[MonthSchedule]:
         results: List[MonthSchedule] = []
@@ -160,14 +132,8 @@ class ShiftScheduler:
             score=int(solver.ObjectiveValue()), solution_label=label,
         )
 
-    # ═══════════════════════════════════════════════
-    # 변수 생성 (💡 핵심 버그 수정 영역)
-    # ═══════════════════════════════════════════════
-
     def _create_vars(self, model: cp_model.CpModel) -> Dict:
         sv: Dict[Tuple, cp_model.IntVar] = {}
-        
-        # 💡 사용자가 지정하지 않으면 AI가 함부로 넣을 수 없는 특수 휴가들
         RESTRICTED_SHIFTS = [ShiftType.ANNUAL, ShiftType.SPECIAL, ShiftType.EDUCATION]
         
         for e, emp in enumerate(self.employees):
@@ -176,19 +142,12 @@ class ShiftScheduler:
                 for s in ALL_SHIFTS:
                     var = model.NewBoolVar(f"e{e}_d{d}_{s.value}")
                     if fixed is not None:
-                        # 고정 일정이 있는 날은 무조건 해당 근무로 고정
                         model.Add(var == (1 if s == fixed else 0))
                     else:
-                        # 💡 고정 일정이 없는 빈 날짜에는 특수 휴가를 AI 마음대로 넣지 못하게 원천 차단!
                         if s in RESTRICTED_SHIFTS:
                             model.Add(var == 0)
-                            
                     sv[(e, d, s)] = var
         return sv
-
-    # ═══════════════════════════════════════════════
-    # 하드 제약 C1 ~ C6
-    # ═══════════════════════════════════════════════
 
     def _c1_one_shift_per_day(self, model, sv):
         for e in range(self.n_emp):
@@ -216,24 +175,27 @@ class ShiftScheduler:
                         model.Add(off_d == 0)
 
     def _c3_c4_consecutive_limits(self, model, sv):
+        """💡 '교육'을 '주간 근무'와 동일하게 피로도로 합산하여 연속근무 제한(C3, C4) 적용"""
         D = ShiftType
         for e, emp in enumerate(self.employees):
             k = self._carry_consec_days(emp.name)
 
             for d in range(1, self.num_days + 1):
                 if d + 4 <= self.num_days:
-                    day_window = [sv[(e, d + i, D.DAY)] for i in range(5)]
+                    # DAY와 EDUCATION을 더해서 주간 출근 횟수로 계산
+                    day_window = [(sv[(e, d + i, D.DAY)] + sv[(e, d + i, D.EDUCATION)]) for i in range(5)]
                     model.Add(sum(day_window) <= 4)
                     model.Add(sum(day_window[:4]) + sv[(e, d + 4, D.NIGHT)] <= 4)
 
             if k > 0:
                 for d in range(1, min(6, self.num_days + 1)):
-                    prefix_day  = [sv[(e, dd, D.DAY)] for dd in range(1, d + 1)]
-                    prefix_prev = [sv[(e, dd, D.DAY)] for dd in range(1, d)]
+                    prefix_day  = [(sv[(e, dd, D.DAY)] + sv[(e, dd, D.EDUCATION)]) for dd in range(1, d + 1)]
+                    prefix_prev = [(sv[(e, dd, D.DAY)] + sv[(e, dd, D.EDUCATION)]) for dd in range(1, d)]
                     model.Add(k + sum(prefix_day)  <= 4)
                     model.Add(k + sum(prefix_prev) + sv[(e, d, D.NIGHT)] <= 4)
 
     def _c5_daily_staffing(self, model, sv):
+        """💡 기관 일일 인원 밸런스. 여기서는 오직 진짜 '주간' 근무자만 카운트합니다."""
         D = ShiftType
         for d in self.days:
             day_sum   = sum(sv[(e, d, D.DAY)]   for e in range(self.n_emp))
@@ -258,10 +220,6 @@ class ShiftScheduler:
         for e in range(self.n_emp):
             emp_holiday_sum = sum(sv[(e, d, D.HOLIDAY)] for d in self.days)
             model.Add(emp_holiday_sum == target_holidays)
-
-    # ═══════════════════════════════════════════════
-    # 소프트 제약 (목적함수)
-    # ═══════════════════════════════════════════════
 
     def _objective(self, model, sv) -> List:
         D     = ShiftType
