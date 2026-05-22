@@ -11,7 +11,6 @@ from validator import validate
 
 st.set_page_config(page_title="사회복무요원 근무표 생성기", layout="wide")
 
-# --- 세션 상태 초기화 ---
 if 'page' not in st.session_state:
     st.session_state.page = 'main'
 if 'generated_results' not in st.session_state:
@@ -27,7 +26,6 @@ if 'carryover_data' not in st.session_state:
 if 'preset_carryover' not in st.session_state:
     st.session_state.preset_carryover = {}
 
-# --- 스타일링 및 맵핑 ---
 def color_shifts(val):
     v = str(val).strip()
     style = 'text-align: center; '
@@ -67,9 +65,6 @@ REVERSE_SHIFT_MAP = {
     ShiftType.SPECIAL: "휴", ShiftType.EDUCATION: "휴"
 }
 
-# ==========================================
-# 📺 화면 1: 메인 설정 및 근무표 생성 화면
-# ==========================================
 def render_main_page():
     st.title("🚀 사회복무요원 근무표 자동화 시스템")
     
@@ -202,14 +197,14 @@ def render_main_page():
 
     st.divider()
     
-    # 💡 [버그 수정] 조건 만족 못 할 때 아무 반응 없이 끝나버리던 현상을 에러 창으로 보여주도록 변경
     if st.button("🚀 근무표 생성하기", type="primary", use_container_width=True):
         if not st.session_state.employees:
             st.error("사회복무요원을 최소 한 명 이상 추가해 주세요.")
         else:
             is_success = run_scheduling_engine()
+            # 💡 [안전장치 추가] 실패 시 무반응이 아니라 확실하게 경고창을 띄워줌
             if not is_success:
-                st.error("🚨 앗! 지정하신 조건으로는 수학적으로 완벽한 근무표를 만들 수 없습니다 (제약 충돌).\n\n특정 날짜에 연가나 휴가가 너무 몰려있거나, 지정 휴일의 개수가 오버되었을 수 있습니다. 일정을 조금 조율한 뒤 다시 생성해 보세요!")
+                st.error("🚨 지정하신 조건으로는 교대근무 제약(야간 후 휴무, 최대 연속 출근 등)을 맞출 수 없습니다!\n\n특정 날짜에 연가나 고정 휴일이 겹치지 않았는지 일정을 확인하고 다시 생성해 보세요.")
             else:
                 st.rerun()
 
@@ -235,7 +230,7 @@ def run_scheduling_engine():
         for d in e['fixed']['교육']: fixed_list.append(FixedSchedule(d, ShiftType.EDUCATION))
         final_emps.append(Employee(e['name'], e['prefer_day'], e['prefer_night'], fixed_list))
     
-    with st.spinner("최적의 근무표를 계산 중입니다..."):
+    with st.spinner("최적의 근무표를 계산 중입니다... (최대 설정 시간만큼 소요될 수 있습니다)"):
         scheduler = ShiftScheduler(year, month, final_emps, st.session_state.carryover_data, st.session_state.num_solutions, st.session_state.time_limit)
         results = scheduler.solve()
         if results:
@@ -243,9 +238,6 @@ def run_scheduling_engine():
             return True
         return False
 
-# ==========================================
-# 📺 화면 2: 전체 스케줄 뷰어 및 편집기
-# ==========================================
 def render_detail_page():
     res = st.session_state.generated_results[st.session_state.selected_idx]
     year = st.session_state.current_year
@@ -417,9 +409,6 @@ def render_detail_page():
         use_container_width=True
     )
 
-# ==========================================
-# 📺 화면 3: <인물별 정보> (개인 상세 뷰어 및 달력)
-# ==========================================
 def render_individual_page():
     year = st.session_state.current_year
     month = st.session_state.current_month
@@ -466,7 +455,7 @@ def render_individual_page():
                 st.success("🎉 개인 최적화 변경사항을 반영하여 근무표가 완벽하게 리스케줄링(재생성) 되었습니다!")
                 st.rerun()
             else:
-                st.error("🚨 새로운 조건이 너무 무거워 알고리즘 엔진이 해를 찾지 못했습니다. 일정을 약간 비워주시고 다시 시도해주세요.")
+                st.error("🚨 새로운 조건 제약이 너무 무거워 알고리즘 엔진이 해를 찾지 못했습니다. 일정을 약간 비워주시고 다시 시도해주세요.")
 
     st.markdown("---")
     st.markdown(f"### 🗓️ {month}월 스케줄 캘린더 구동 뷰어")
@@ -488,6 +477,7 @@ def render_individual_page():
     h_cols = st.columns(7)
     for i, h in enumerate(headers):
         color = "#FF4B4B" if i == 0 else ("#0070C0" if i == 6 else "white")
+        # 💡 에러 원인 완벽 수정: unsafe_allow_html=True
         h_cols[i].markdown(f"<div style='text-align: center; background-color: #31333F; color: {color}; padding: 5px; font-weight: bold; border-radius: 4px;'>{h}</div>", unsafe_allow_html=True)
 
     for week_idx in range(len(cal_days) // 7):
@@ -496,6 +486,7 @@ def render_individual_page():
         
         for day_pos, d in enumerate(week_days):
             if d is None:
+                # 💡 에러 원인 완벽 수정: unsafe_allow_html=True
                 w_cols[day_pos].markdown("<div style='min-height: 80px;'></div>", unsafe_allow_html=True)
             else:
                 date_obj = datetime.date(year, month, d)
@@ -532,6 +523,7 @@ def render_individual_page():
                     </div>
                 </div>
                 """
+                # 💡 에러 원인 완벽 수정: unsafe_allow_html=True
                 w_cols[day_pos].markdown(html_box, unsafe_allow_html=True)
 
 if st.session_state.page == 'main':
