@@ -110,14 +110,15 @@ def render_main_page():
     if st.button("➕ 사회복무요원 추가"):
         st.session_state.employees.append({
             "name": "", "prefer_day": True, "prefer_night": False, 
-            "fixed": {"연가": [], "특별": [], "교육": [], "휴일": []}
+            "fixed": {"연가": [], "특별": [], "교육": [], "휴일": []},
+            "desired": {"주간": [], "야간": []} # 💡 신규 추가
         })
 
     cols = st.columns([2, 1, 1, 4, 1])
     cols[0].markdown("**이름**")
     cols[1].markdown("**주간선호**")
     cols[2].markdown("**야간선호**")
-    cols[3].markdown("**고정 일정 (지정휴일/연가/특휴/교육)**")
+    cols[3].markdown("**근무 일정 세부설정 (고정/희망)**")
     cols[4].markdown("**삭제**")
 
     for idx, emp in enumerate(st.session_state.employees):
@@ -126,20 +127,19 @@ def render_main_page():
         emp['prefer_day'] = c2.checkbox(f"주 {idx}", value=emp['prefer_day'], label_visibility="collapsed")
         emp['prefer_night'] = c3.checkbox(f"야 {idx}", value=emp['prefer_night'], label_visibility="collapsed")
         
-        old_fixed = emp.get('fixed', {})
-        if isinstance(old_fixed, str):
+        # 이전 버전 백업 데이터 호환성 보장
+        if 'fixed' not in emp or isinstance(emp['fixed'], str):
             emp['fixed'] = {"연가": [], "특별": [], "교육": [], "휴일": []}
-        else:
-            emp['fixed'] = {
-                "연가": old_fixed.get("연가", []), "특별": old_fixed.get("특별", []), 
-                "교육": old_fixed.get("교육", []), "휴일": old_fixed.get("휴일", [])
-            }
+        if 'desired' not in emp or isinstance(emp['desired'], str):
+            emp['desired'] = {"주간": [], "야간": []}
             
-        total_fixed = len(emp['fixed']['연가']) + len(emp['fixed']['특별']) + len(emp['fixed']['교육']) + len(emp['fixed']['휴일'])
-        btn_label = f"📅 일정 관리 (총 {total_fixed}일)" if total_fixed > 0 else "📅 일정 추가"
+        total_fixed = sum(len(v) for v in emp['fixed'].values())
+        total_desired = sum(len(v) for v in emp['desired'].values())
+        
+        btn_label = f"📅 일정 관리 (고정 {total_fixed} / 희망 {total_desired})"
         
         with c4.popover(btn_label, use_container_width=True):
-            st.markdown(f"**{emp['name'] if emp['name'] else '이름 없음'}** 요원 고정 일정")
+            st.markdown(f"**{emp['name'] if emp['name'] else '이름 없음'}** 요원 고정 일정 (필수)")
             valid_hol = [d for d in emp['fixed']['휴일'] if d in month_days]
             valid_ann = [d for d in emp['fixed']['연가'] if d in month_days]
             valid_spe = [d for d in emp['fixed']['특별'] if d in month_days]
@@ -149,6 +149,13 @@ def render_main_page():
             emp['fixed']['연가'] = st.multiselect("🌴 연가", options=month_days, default=valid_ann, key=f"ann_{idx}")
             emp['fixed']['특별'] = st.multiselect("🎁 특별휴가", options=month_days, default=valid_spe, key=f"spe_{idx}")
             emp['fixed']['교육'] = st.multiselect("📚 교육", options=month_days, default=valid_edu, key=f"edu_{idx}")
+
+            st.divider()
+            st.markdown("**💡 희망 근무 (가능한 경우 우선 배정)**")
+            valid_des_day = [d for d in emp['desired']['주간'] if d in month_days]
+            valid_des_night = [d for d in emp['desired']['야간'] if d in month_days]
+            emp['desired']['주간'] = st.multiselect("☀️ 희망 주간", options=month_days, default=valid_des_day, key=f"des_d_{idx}")
+            emp['desired']['야간'] = st.multiselect("🌙 희망 야간", options=month_days, default=valid_des_night, key=f"des_n_{idx}")
 
         if c5.button("🗑️", key=f"del_{idx}"):
             st.session_state.employees.pop(idx)
@@ -202,7 +209,6 @@ def render_main_page():
             st.error("사회복무요원을 최소 한 명 이상 추가해 주세요.")
         else:
             is_success = run_scheduling_engine()
-            # 💡 [안전장치 추가] 실패 시 무반응이 아니라 확실하게 경고창을 띄워줌
             if not is_success:
                 st.error("🚨 지정하신 조건으로는 교대근무 제약(야간 후 휴무, 최대 연속 출근 등)을 맞출 수 없습니다!\n\n특정 날짜에 연가나 고정 휴일이 겹치지 않았는지 일정을 확인하고 다시 생성해 보세요.")
             else:
@@ -223,12 +229,19 @@ def run_scheduling_engine():
     final_emps = []
     for e in st.session_state.employees:
         if not e['name'].strip(): continue
+        
         fixed_list = []
         for d in e['fixed']['휴일']: fixed_list.append(FixedSchedule(d, ShiftType.HOLIDAY))
         for d in e['fixed']['연가']: fixed_list.append(FixedSchedule(d, ShiftType.ANNUAL))
         for d in e['fixed']['특별']: fixed_list.append(FixedSchedule(d, ShiftType.SPECIAL))
         for d in e['fixed']['교육']: fixed_list.append(FixedSchedule(d, ShiftType.EDUCATION))
-        final_emps.append(Employee(e['name'], e['prefer_day'], e['prefer_night'], fixed_list))
+        
+        # 💡 희망 근무 데이터 연동
+        desired_list = []
+        for d in e['desired']['주간']: desired_list.append(FixedSchedule(d, ShiftType.DAY))
+        for d in e['desired']['야간']: desired_list.append(FixedSchedule(d, ShiftType.NIGHT))
+        
+        final_emps.append(Employee(e['name'], e['prefer_day'], e['prefer_night'], fixed_list, desired_list))
     
     with st.spinner("최적의 근무표를 계산 중입니다... (최대 설정 시간만큼 소요될 수 있습니다)"):
         scheduler = ShiftScheduler(year, month, final_emps, st.session_state.carryover_data, st.session_state.num_solutions, st.session_state.time_limit)
@@ -384,11 +397,13 @@ def render_detail_page():
             "-1": REVERSE_SHIFT_MAP.get(res.get_shift(emp.name, num_days - 1), "휴"),
             "0": REVERSE_SHIFT_MAP.get(res.get_shift(emp.name, num_days), "휴")
         }
+        
         next_month_employees.append({
             "name": emp.name,
             "prefer_day": emp.prefer_day,
             "prefer_night": emp.prefer_night,
-            "fixed": {"연가": [], "특별": [], "교육": [], "휴일": []}
+            "fixed": {"연가": [], "특별": [], "교육": [], "휴일": []},
+            "desired": {"주간": [], "야간": []} # 다음달 세팅용으로 빈값 저장
         })
         
     next_month_preset = {
@@ -433,21 +448,26 @@ def render_individual_page():
     emp_data = st.session_state.employees[emp_idx]
 
     st.markdown("### ⚙️ 개인 근무 제약 및 선호도 수정")
-    exp1 = st.expander("🛠️ 이 요원의 선호도 및 고정일정 변경하기 (클릭하여 열기)", expanded=False)
+    exp1 = st.expander("🛠️ 이 요원의 선호도 및 고정/희망 일정 변경하기 (클릭하여 열기)", expanded=False)
     with exp1:
         cc1, cc2 = st.columns(2)
         emp_data['prefer_day'] = cc1.checkbox("주간 근무 선호", value=emp_data['prefer_day'], key=f"ind_pref_d")
         emp_data['prefer_night'] = cc2.checkbox("야간 근무 선호", value=emp_data['prefer_night'], key=f"ind_pref_n")
         
-        st.markdown("**고정 일정 관리**")
+        st.markdown("**고정 일정 관리 (필수)**")
         emp_data['fixed']['휴일'] = st.multiselect("🔴 지정 휴일 선택", options=month_days, default=emp_data['fixed'].get('휴일', []), key="ind_hol")
         emp_data['fixed']['연가'] = st.multiselect("🌴 연가 선택", options=month_days, default=emp_data['fixed'].get('연가', []), key="ind_ann")
         emp_data['fixed']['특별'] = st.multiselect("🎁 특별휴가 선택", options=month_days, default=emp_data['fixed'].get('특별', []), key="ind_spe")
         emp_data['fixed']['교육'] = st.multiselect("📚 교육 선택", options=month_days, default=emp_data['fixed'].get('교육', []), key="ind_edu")
         
+        st.divider()
+        st.markdown("**💡 희망 근무 (가능한 경우 우선 배정)**")
+        emp_data['desired']['주간'] = st.multiselect("☀️ 희망 주간", options=month_days, default=emp_data['desired'].get('주간', []), key="ind_des_d")
+        emp_data['desired']['야간'] = st.multiselect("🌙 희망 야간", options=month_days, default=emp_data['desired'].get('야간', []), key="ind_des_n")
+        
         action_c1, action_c2 = st.columns(2)
         if action_c1.button("💾 변경사항 적용 (저장)", type="primary", use_container_width=True):
-            st.success(f"💾 {emp_name} 요원의 선호 설정이 데이터베이스에 임시 반영되었습니다.")
+            st.success(f"💾 {emp_name} 요원의 설정이 데이터베이스에 임시 반영되었습니다.")
             
         if action_c2.button("🔄 이 설정 바탕으로 근무표 전체 재생성 (리스케줄링)", use_container_width=True):
             is_success = run_scheduling_engine()
@@ -477,7 +497,6 @@ def render_individual_page():
     h_cols = st.columns(7)
     for i, h in enumerate(headers):
         color = "#FF4B4B" if i == 0 else ("#0070C0" if i == 6 else "white")
-        # 💡 에러 원인 완벽 수정: unsafe_allow_html=True
         h_cols[i].markdown(f"<div style='text-align: center; background-color: #31333F; color: {color}; padding: 5px; font-weight: bold; border-radius: 4px;'>{h}</div>", unsafe_allow_html=True)
 
     for week_idx in range(len(cal_days) // 7):
@@ -486,7 +505,6 @@ def render_individual_page():
         
         for day_pos, d in enumerate(week_days):
             if d is None:
-                # 💡 에러 원인 완벽 수정: unsafe_allow_html=True
                 w_cols[day_pos].markdown("<div style='min-height: 80px;'></div>", unsafe_allow_html=True)
             else:
                 date_obj = datetime.date(year, month, d)
@@ -523,7 +541,6 @@ def render_individual_page():
                     </div>
                 </div>
                 """
-                # 💡 에러 원인 완벽 수정: unsafe_allow_html=True
                 w_cols[day_pos].markdown(html_box, unsafe_allow_html=True)
 
 if st.session_state.page == 'main':
