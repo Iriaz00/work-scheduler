@@ -20,6 +20,7 @@ class ShiftType(str, Enum):
         """근무일로 집계되는 유형 (비번·교육 포함)"""
         return self in (ShiftType.DAY, ShiftType.NIGHT, ShiftType.OFF, ShiftType.EDUCATION)
 
+
 ALL_SHIFTS: List[ShiftType] = list(ShiftType)
 
 @dataclass
@@ -62,7 +63,7 @@ class MonthSchedule:
                          + cnt[ShiftType.ANNUAL]
                          + cnt[ShiftType.SPECIAL])
         return {
-            # 💡 [핵심] 주간 횟수에 교육 횟수를 더해서 표기합니다. (교육 카운트도 별도로 유지)
+            # 💡 주간 횟수에 교육 횟수를 더해서 표기합니다.
             '주간': cnt[ShiftType.DAY] + cnt[ShiftType.EDUCATION],
             '야간': cnt[ShiftType.NIGHT],
             '비번': cnt[ShiftType.OFF],
