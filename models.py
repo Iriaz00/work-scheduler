@@ -31,7 +31,6 @@ class Employee:
     prefer_day:      bool = False
     prefer_night:    bool = False
     fixed_schedules: List[FixedSchedule] = field(default_factory=list)
-    # 💡 [신규 추가] 소프트 제약으로 반영될 '희망 근무' 리스트
     desired_schedules: List[FixedSchedule] = field(default_factory=list) 
 
     def get_fixed_shift(self, day: int) -> Optional[ShiftType]:
@@ -68,7 +67,8 @@ class MonthSchedule:
                          + cnt[ShiftType.ANNUAL]
                          + cnt[ShiftType.SPECIAL])
         return {
-            '주간': cnt[ShiftType.DAY] + cnt[ShiftType.EDUCATION],
+            # 💡 교육을 주간에서 완전히 분리 (기존 로직으로 원복)
+            '주간': cnt[ShiftType.DAY], 
             '야간': cnt[ShiftType.NIGHT],
             '비번': cnt[ShiftType.OFF],
             '휴일': cnt[ShiftType.HOLIDAY],
