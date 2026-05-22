@@ -98,13 +98,12 @@ class ShiftScheduler:
         model = cp_model.CpModel()
         sv    = self._create_vars(model)
 
-        # 💡 하드 제약들 적용
         self._c1_one_shift_per_day(model, sv)
         self._c2_night_sequence(model, sv)
         self._c3_c4_consecutive_limits(model, sv)
         self._c5_daily_staffing(model, sv)
         self._c6_equal_holidays(model, sv)
-        self._c8_limit_consecutive_holidays(model, sv) # 🌟 뭉침 방지 강력 적용!
+        # 💡 하드제약(_c8) 삭제: 뻑나는 문제를 방지하기 위해 여기서 뺐습니다.
 
         for p in prev_results:
             self._exclude(model, sv, p)
@@ -224,30 +223,11 @@ class ShiftScheduler:
             emp_holiday_sum = sum(sv[(e, d, D.HOLIDAY)] for d in self.days)
             model.Add(emp_holiday_sum == target_holidays)
 
-    # 🌟 [신규 강력 추가] 3일 연속 휴일 방지 (하드 제약)
-    def _c8_limit_consecutive_holidays(self, model, sv):
-        """AI가 꼼수로 3일 연속 '휴'를 때려넣는 것을 원천 차단 (단, 사용자가 강제로 지정한 경우는 허용)"""
-        D = ShiftType
-        for e, emp in enumerate(self.employees):
-            # 사용자가 미리 지정해둔 고정 휴일/연가/특휴 날짜들
-            fixed_off_days = {fs.day for fs in emp.fixed_schedules if fs.shift in (D.HOLIDAY, D.ANNUAL, D.SPECIAL)}
-            
-            for d in range(1, self.num_days - 1):
-                # 만약 d, d+1, d+2일이 모두 사용자가 고정한 날짜라면? -> AI가 개입하지 않고 그냥 넘김 (허용)
-                if d in fixed_off_days and (d+1) in fixed_off_days and (d+2) in fixed_off_days:
-                    continue
-                    
-                # 그 외의 모든 경우, 3일 연속 '휴(HOLIDAY)' 배정은 무조건 불가능하도록 수식 적용
-                model.Add(
-                    sv[(e, d, D.HOLIDAY)] + 
-                    sv[(e, d + 1, D.HOLIDAY)] + 
-                    sv[(e, d + 2, D.HOLIDAY)] <= 2
-                )
-
     def _objective(self, model, sv) -> List:
         D     = ShiftType
         terms = []
 
+        # S1: 선호도 반영 (+3점)
         for e, emp in enumerate(self.employees):
             for d in self.days:
                 if emp.prefer_day:
@@ -255,6 +235,7 @@ class ShiftScheduler:
                 if emp.prefer_night:
                     terms.append(sv[(e, d, D.NIGHT)] * 3)
 
+        # S2, S3: 인원 밸런스 최적화 (+5점, -3점)
         for d in self.days:
             day_s   = model.NewIntVar(0, self.n_emp, f"ds_{d}")
             night_s = model.NewIntVar(0, self.n_emp, f"ns_{d}")
@@ -276,7 +257,33 @@ class ShiftScheduler:
             model.Add(day_s != 3).OnlyEnforceIf(b_d3.Not())
             terms.append(b_d3 * (-3))
 
-        # 기존 S4 페널티는 하드 제약(_c8)으로 승격되었으므로 깔끔하게 삭제됨.
+        # 🌟 S4: [핵심] 휴일 몰림 방지 폭탄 페널티 (-100점)
+        # 선호도를 무시하더라도 3연속 휴일은 절대 피하도록 유도
+        for e, emp in enumerate(self.employees):
+            # 단, 사용자가 연가 등으로 '직접 고정해둔 날짜'는 페널티 대상에서 제외합니다.
+            fixed_off_days = {fs.day for fs in emp.fixed_schedules if fs.shift in (D.HOLIDAY, D.ANNUAL, D.SPECIAL)}
+            
+            for d in range(1, self.num_days - 1):
+                # 3일 내내 사용자가 수동으로 박아둔 일정이라면 통과
+                if d in fixed_off_days and (d+1) in fixed_off_days and (d+2) in fixed_off_days:
+                    continue
+                
+                b_consec3 = model.NewBoolVar(f"c3hol_e{e}_d{d}")
+                model.AddBoolAnd([
+                    sv[(e, d, D.HOLIDAY)],
+                    sv[(e, d+1, D.HOLIDAY)],
+                    sv[(e, d+2, D.HOLIDAY)]
+                ]).OnlyEnforceIf(b_consec3)
+                
+                model.AddBoolOr([
+                    sv[(e, d, D.HOLIDAY)].Not(),
+                    sv[(e, d+1, D.HOLIDAY)].Not(),
+                    sv[(e, d+2, D.HOLIDAY)].Not()
+                ]).OnlyEnforceIf(b_consec3.Not())
+                
+                # 🔥 선호도 한달 치를 다 모아도 90점인데, 한번 뭉치면 100점을 깎아버립니다.
+                terms.append(b_consec3 * (-100)) 
+
         return terms
 
     def _exclude(self, model, sv, prev: MonthSchedule):
