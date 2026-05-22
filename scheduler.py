@@ -6,7 +6,12 @@ import datetime
 from ortools.sat.python import cp_model
 from models import ALL_SHIFTS, Employee, FixedSchedule, MonthSchedule, ShiftType
 
+
 class ShiftScheduler:
+    """
+    OR-Tools CP-SAT 기반 교대 근무표 자동 생성 엔진
+    """
+
     _STATUS = {
         cp_model.OPTIMAL:    "✅ 최적해",
         cp_model.FEASIBLE:   "⚠️  가능해(비최적)",
@@ -43,7 +48,7 @@ class ShiftScheduler:
         return self.carryover.get(emp_name, {}).get(day)
 
     def _carry_consec_days(self, emp_name: str) -> int:
-        """💡 전월 말미 연속 근무 체크 시 '교육'도 '주간' 피로도로 합산합니다."""
+        """💡 전월 말미 연속 근무 체크 시 '교육'도 '주간' 피로도로 합산"""
         cnt = 0
         for d in (0, -1, -2, -3):
             if self._carry(emp_name, d) in (ShiftType.DAY, ShiftType.EDUCATION):
@@ -182,7 +187,6 @@ class ShiftScheduler:
 
             for d in range(1, self.num_days + 1):
                 if d + 4 <= self.num_days:
-                    # DAY와 EDUCATION을 더해서 주간 출근 횟수로 계산
                     day_window = [(sv[(e, d + i, D.DAY)] + sv[(e, d + i, D.EDUCATION)]) for i in range(5)]
                     model.Add(sum(day_window) <= 4)
                     model.Add(sum(day_window[:4]) + sv[(e, d + 4, D.NIGHT)] <= 4)
@@ -195,7 +199,6 @@ class ShiftScheduler:
                     model.Add(k + sum(prefix_prev) + sv[(e, d, D.NIGHT)] <= 4)
 
     def _c5_daily_staffing(self, model, sv):
-        """💡 기관 일일 인원 밸런스. 여기서는 오직 진짜 '주간' 근무자만 카운트합니다."""
         D = ShiftType
         for d in self.days:
             day_sum   = sum(sv[(e, d, D.DAY)]   for e in range(self.n_emp))
@@ -252,6 +255,24 @@ class ShiftScheduler:
             model.Add(day_s == 3).OnlyEnforceIf(b_d3)
             model.Add(day_s != 3).OnlyEnforceIf(b_d3.Not())
             terms.append(b_d3 * (-3))
+
+        # 💡 S4: 휴일 분산 (연속 3일 '휴' 배정 방지 페널티)
+        for e in range(self.n_emp):
+            for d in range(1, self.num_days - 1):
+                b_consec3 = model.NewBoolVar(f"c3hol_e{e}_d{d}")
+                model.AddBoolAnd([
+                    sv[(e, d, D.HOLIDAY)],
+                    sv[(e, d+1, D.HOLIDAY)],
+                    sv[(e, d+2, D.HOLIDAY)]
+                ]).OnlyEnforceIf(b_consec3)
+                
+                model.AddBoolOr([
+                    sv[(e, d, D.HOLIDAY)].Not(),
+                    sv[(e, d+1, D.HOLIDAY)].Not(),
+                    sv[(e, d+2, D.HOLIDAY)].Not()
+                ]).OnlyEnforceIf(b_consec3.Not())
+                
+                terms.append(b_consec3 * (-20))
 
         return terms
 
