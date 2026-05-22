@@ -48,7 +48,6 @@ class ShiftScheduler:
         return self.carryover.get(emp_name, {}).get(day)
 
     def _carry_consec_days(self, emp_name: str) -> int:
-        """💡 전월 말미 연속 근무 체크 시 '교육'도 '주간' 피로도로 합산"""
         cnt = 0
         for d in (0, -1, -2, -3):
             if self._carry(emp_name, d) in (ShiftType.DAY, ShiftType.EDUCATION):
@@ -99,11 +98,13 @@ class ShiftScheduler:
         model = cp_model.CpModel()
         sv    = self._create_vars(model)
 
+        # 💡 하드 제약들 적용
         self._c1_one_shift_per_day(model, sv)
         self._c2_night_sequence(model, sv)
         self._c3_c4_consecutive_limits(model, sv)
         self._c5_daily_staffing(model, sv)
         self._c6_equal_holidays(model, sv)
+        self._c8_limit_consecutive_holidays(model, sv) # 🌟 뭉침 방지 강력 적용!
 
         for p in prev_results:
             self._exclude(model, sv, p)
@@ -180,7 +181,6 @@ class ShiftScheduler:
                         model.Add(off_d == 0)
 
     def _c3_c4_consecutive_limits(self, model, sv):
-        """💡 '교육'을 '주간 근무'와 동일하게 피로도로 합산하여 연속근무 제한(C3, C4) 적용"""
         D = ShiftType
         for e, emp in enumerate(self.employees):
             k = self._carry_consec_days(emp.name)
@@ -224,6 +224,26 @@ class ShiftScheduler:
             emp_holiday_sum = sum(sv[(e, d, D.HOLIDAY)] for d in self.days)
             model.Add(emp_holiday_sum == target_holidays)
 
+    # 🌟 [신규 강력 추가] 3일 연속 휴일 방지 (하드 제약)
+    def _c8_limit_consecutive_holidays(self, model, sv):
+        """AI가 꼼수로 3일 연속 '휴'를 때려넣는 것을 원천 차단 (단, 사용자가 강제로 지정한 경우는 허용)"""
+        D = ShiftType
+        for e, emp in enumerate(self.employees):
+            # 사용자가 미리 지정해둔 고정 휴일/연가/특휴 날짜들
+            fixed_off_days = {fs.day for fs in emp.fixed_schedules if fs.shift in (D.HOLIDAY, D.ANNUAL, D.SPECIAL)}
+            
+            for d in range(1, self.num_days - 1):
+                # 만약 d, d+1, d+2일이 모두 사용자가 고정한 날짜라면? -> AI가 개입하지 않고 그냥 넘김 (허용)
+                if d in fixed_off_days and (d+1) in fixed_off_days and (d+2) in fixed_off_days:
+                    continue
+                    
+                # 그 외의 모든 경우, 3일 연속 '휴(HOLIDAY)' 배정은 무조건 불가능하도록 수식 적용
+                model.Add(
+                    sv[(e, d, D.HOLIDAY)] + 
+                    sv[(e, d + 1, D.HOLIDAY)] + 
+                    sv[(e, d + 2, D.HOLIDAY)] <= 2
+                )
+
     def _objective(self, model, sv) -> List:
         D     = ShiftType
         terms = []
@@ -256,24 +276,7 @@ class ShiftScheduler:
             model.Add(day_s != 3).OnlyEnforceIf(b_d3.Not())
             terms.append(b_d3 * (-3))
 
-        # 💡 S4: 휴일 분산 (연속 3일 '휴' 배정 방지 페널티)
-        for e in range(self.n_emp):
-            for d in range(1, self.num_days - 1):
-                b_consec3 = model.NewBoolVar(f"c3hol_e{e}_d{d}")
-                model.AddBoolAnd([
-                    sv[(e, d, D.HOLIDAY)],
-                    sv[(e, d+1, D.HOLIDAY)],
-                    sv[(e, d+2, D.HOLIDAY)]
-                ]).OnlyEnforceIf(b_consec3)
-                
-                model.AddBoolOr([
-                    sv[(e, d, D.HOLIDAY)].Not(),
-                    sv[(e, d+1, D.HOLIDAY)].Not(),
-                    sv[(e, d+2, D.HOLIDAY)].Not()
-                ]).OnlyEnforceIf(b_consec3.Not())
-                
-                terms.append(b_consec3 * (-20))
-
+        # 기존 S4 페널티는 하드 제약(_c8)으로 승격되었으므로 깔끔하게 삭제됨.
         return terms
 
     def _exclude(self, model, sv, prev: MonthSchedule):
