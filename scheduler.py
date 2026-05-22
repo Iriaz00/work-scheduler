@@ -248,11 +248,6 @@ class ShiftScheduler:
             model.Add(night_s != 2).OnlyEnforceIf(b_n2.Not())
             terms.append(b_n2 * 5)
 
-            b_d3 = model.NewBoolVar(f"d3_{d}")
-            model.Add(day_s == 3).OnlyEnforceIf(b_d3)
-            model.Add(day_s != 3).OnlyEnforceIf(b_d3.Not())
-            terms.append(b_d3 * (-3))
-
         # S4: 주간 연속 4일 근무 패널티 (-15점)
         for e, emp in enumerate(self.employees):
             k = self._carry_consec_days(emp.name)
