@@ -25,7 +25,6 @@ class ShiftScheduler:
     ):
         self.year          = year
         self.month         = month
-        # 💡 [신규 반영] 희망 근무(desired_schedules) 데이터 연동
         self.employees     = [
             Employee(e.name, e.prefer_day, e.prefer_night, list(e.fixed_schedules), list(e.desired_schedules))
             for e in employees
@@ -46,7 +45,8 @@ class ShiftScheduler:
     def _carry_consec_days(self, emp_name: str) -> int:
         cnt = 0
         for d in (0, -1, -2, -3):
-            if self._carry(emp_name, d) in (ShiftType.DAY, ShiftType.EDUCATION):
+            # 💡 이월 데이터 체크 시에도 오직 '주간(DAY)'만 카운트
+            if self._carry(emp_name, d) == ShiftType.DAY:
                 cnt += 1
             else:
                 break
@@ -181,14 +181,15 @@ class ShiftScheduler:
 
             for d in range(1, self.num_days + 1):
                 if d + 4 <= self.num_days:
-                    day_window = [(sv[(e, d + i, D.DAY)] + sv[(e, d + i, D.EDUCATION)]) for i in range(5)]
+                    # 💡 교육 제외, 순수 주간(DAY)만 계산하도록 원복
+                    day_window = [sv[(e, d + i, D.DAY)] for i in range(5)]
                     model.Add(sum(day_window) <= 4)
                     model.Add(sum(day_window[:4]) + sv[(e, d + 4, D.NIGHT)] <= 4)
 
             if k > 0:
                 for d in range(1, min(6, self.num_days + 1)):
-                    prefix_day  = [(sv[(e, dd, D.DAY)] + sv[(e, dd, D.EDUCATION)]) for dd in range(1, d + 1)]
-                    prefix_prev = [(sv[(e, dd, D.DAY)] + sv[(e, dd, D.EDUCATION)]) for dd in range(1, d)]
+                    prefix_day  = [sv[(e, dd, D.DAY)] for dd in range(1, d + 1)]
+                    prefix_prev = [sv[(e, dd, D.DAY)] for dd in range(1, d)]
                     model.Add(k + sum(prefix_day)  <= 4)
                     model.Add(k + sum(prefix_prev) + sv[(e, d, D.NIGHT)] <= 4)
 
@@ -252,35 +253,35 @@ class ShiftScheduler:
             model.Add(day_s != 3).OnlyEnforceIf(b_d3.Not())
             terms.append(b_d3 * (-3))
 
-        # 🌟 [신규 반영 1] S4: 주간 연속 4일 근무 패널티 (-15점)
-        # 이월 데이터 포함 및 당월 데이터를 검사하여 연속 4일 출근 시 벌점 부여
+        # S4: 주간 연속 4일 근무 패널티 (-15점)
         for e, emp in enumerate(self.employees):
             k = self._carry_consec_days(emp.name)
             if k > 0:
                 if k == 3 and 1 <= self.num_days:
                     b_c4 = model.NewBoolVar(f"c4_c_e{e}")
-                    model.Add(sv[(e,1,D.DAY)] + sv[(e,1,D.EDUCATION)] == 1).OnlyEnforceIf(b_c4)
-                    model.Add(sv[(e,1,D.DAY)] + sv[(e,1,D.EDUCATION)] == 0).OnlyEnforceIf(b_c4.Not())
+                    # 💡 교육 제외, 순수 주간(DAY)만 계산하도록 원복
+                    model.Add(sv[(e,1,D.DAY)] == 1).OnlyEnforceIf(b_c4)
+                    model.Add(sv[(e,1,D.DAY)] == 0).OnlyEnforceIf(b_c4.Not())
                     terms.append(b_c4 * (-15))
                 elif k == 2 and 2 <= self.num_days:
                     b_c4 = model.NewBoolVar(f"c4_c_e{e}")
-                    model.Add(sv[(e,1,D.DAY)] + sv[(e,1,D.EDUCATION)] + sv[(e,2,D.DAY)] + sv[(e,2,D.EDUCATION)] == 2).OnlyEnforceIf(b_c4)
-                    model.Add(sv[(e,1,D.DAY)] + sv[(e,1,D.EDUCATION)] + sv[(e,2,D.DAY)] + sv[(e,2,D.EDUCATION)] != 2).OnlyEnforceIf(b_c4.Not())
+                    model.Add(sv[(e,1,D.DAY)] + sv[(e,2,D.DAY)] == 2).OnlyEnforceIf(b_c4)
+                    model.Add(sv[(e,1,D.DAY)] + sv[(e,2,D.DAY)] != 2).OnlyEnforceIf(b_c4.Not())
                     terms.append(b_c4 * (-15))
                 elif k == 1 and 3 <= self.num_days:
                     b_c4 = model.NewBoolVar(f"c4_c_e{e}")
-                    model.Add(sum(sv[(e,d,D.DAY)] + sv[(e,d,D.EDUCATION)] for d in [1,2,3]) == 3).OnlyEnforceIf(b_c4)
-                    model.Add(sum(sv[(e,d,D.DAY)] + sv[(e,d,D.EDUCATION)] for d in [1,2,3]) != 3).OnlyEnforceIf(b_c4.Not())
+                    model.Add(sum(sv[(e,d,D.DAY)] for d in [1,2,3]) == 3).OnlyEnforceIf(b_c4)
+                    model.Add(sum(sv[(e,d,D.DAY)] for d in [1,2,3]) != 3).OnlyEnforceIf(b_c4.Not())
                     terms.append(b_c4 * (-15))
 
             for d in range(1, self.num_days - 2): # d, d+1, d+2, d+3
                 b_4d = model.NewBoolVar(f"c4_e{e}_d{d}")
-                window_sum = sum(sv[(e, dd, D.DAY)] + sv[(e, dd, D.EDUCATION)] for dd in range(d, d + 4))
+                window_sum = sum(sv[(e, dd, D.DAY)] for dd in range(d, d + 4))
                 model.Add(window_sum == 4).OnlyEnforceIf(b_4d)
                 model.Add(window_sum != 4).OnlyEnforceIf(b_4d.Not())
                 terms.append(b_4d * (-15))
 
-        # 🌟 [신규 반영 2] S5: 사용자 희망 근무 (Soft Constraint) 우선 배정 (+20점)
+        # S5: 사용자 희망 근무 우선 배정 (+20점)
         for e, emp in enumerate(self.employees):
             for ds in emp.desired_schedules:
                 if ds.day in self.days:
