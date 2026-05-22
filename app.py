@@ -111,7 +111,7 @@ def render_main_page():
         st.session_state.employees.append({
             "name": "", "prefer_day": True, "prefer_night": False, 
             "fixed": {"연가": [], "특별": [], "교육": [], "휴일": []},
-            "desired": {"주간": [], "야간": []} # 💡 신규 추가
+            "desired": {"주간": [], "야간": []}
         })
 
     cols = st.columns([2, 1, 1, 4, 1])
@@ -127,7 +127,6 @@ def render_main_page():
         emp['prefer_day'] = c2.checkbox(f"주 {idx}", value=emp['prefer_day'], label_visibility="collapsed")
         emp['prefer_night'] = c3.checkbox(f"야 {idx}", value=emp['prefer_night'], label_visibility="collapsed")
         
-        # 이전 버전 백업 데이터 호환성 보장
         if 'fixed' not in emp or isinstance(emp['fixed'], str):
             emp['fixed'] = {"연가": [], "특별": [], "교육": [], "휴일": []}
         if 'desired' not in emp or isinstance(emp['desired'], str):
@@ -236,7 +235,6 @@ def run_scheduling_engine():
         for d in e['fixed']['특별']: fixed_list.append(FixedSchedule(d, ShiftType.SPECIAL))
         for d in e['fixed']['교육']: fixed_list.append(FixedSchedule(d, ShiftType.EDUCATION))
         
-        # 💡 희망 근무 데이터 연동
         desired_list = []
         for d in e['desired']['주간']: desired_list.append(FixedSchedule(d, ShiftType.DAY))
         for d in e['desired']['야간']: desired_list.append(FixedSchedule(d, ShiftType.NIGHT))
@@ -251,11 +249,16 @@ def run_scheduling_engine():
             return True
         return False
 
+# ==========================================
+# 📺 화면 2: 전체 스케줄 뷰어 및 편집기
+# ==========================================
 def render_detail_page():
     res = st.session_state.generated_results[st.session_state.selected_idx]
-    year = st.session_state.current_year
-    month = st.session_state.current_month
-    _, num_days = calendar.monthrange(year, month)
+    
+    # 💡 [버그 수정] 사이드바 설정값이 아니라 '생성된 결과 원본'의 연, 월, 일수를 무조건 따르도록 고정
+    year = res.year
+    month = res.month
+    num_days = res.num_days
     month_days = list(range(1, num_days + 1))
 
     c1, c2 = st.columns([1, 4])
@@ -403,7 +406,7 @@ def render_detail_page():
             "prefer_day": emp.prefer_day,
             "prefer_night": emp.prefer_night,
             "fixed": {"연가": [], "특별": [], "교육": [], "휴일": []},
-            "desired": {"주간": [], "야간": []} # 다음달 세팅용으로 빈값 저장
+            "desired": {"주간": [], "야간": []}
         })
         
     next_month_preset = {
@@ -424,14 +427,19 @@ def render_detail_page():
         use_container_width=True
     )
 
+# ==========================================
+# 📺 화면 3: <인물별 정보> (개인 상세 뷰어 및 달력)
+# ==========================================
 def render_individual_page():
-    year = st.session_state.current_year
-    month = st.session_state.current_month
-    emp_name = st.session_state.selected_emp_name
     res = st.session_state.generated_results[st.session_state.selected_idx]
     
-    _, num_days = calendar.monthrange(year, month)
+    # 💡 [버그 수정] 개인 달력도 사이드바 설정값이 아니라 원본을 무조건 따르도록 고정
+    year = res.year
+    month = res.month
+    num_days = res.num_days
     month_days = list(range(1, num_days + 1))
+    
+    emp_name = st.session_state.selected_emp_name
 
     emp_idx = next((i for i, e in enumerate(st.session_state.employees) if e['name'] == emp_name), None)
     
