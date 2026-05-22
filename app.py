@@ -201,11 +201,17 @@ def render_main_page():
         )
 
     st.divider()
+    
+    # 💡 [버그 수정] 조건 만족 못 할 때 아무 반응 없이 끝나버리던 현상을 에러 창으로 보여주도록 변경
     if st.button("🚀 근무표 생성하기", type="primary", use_container_width=True):
         if not st.session_state.employees:
             st.error("사회복무요원을 최소 한 명 이상 추가해 주세요.")
         else:
-            run_scheduling_engine()
+            is_success = run_scheduling_engine()
+            if not is_success:
+                st.error("🚨 앗! 지정하신 조건으로는 수학적으로 완벽한 근무표를 만들 수 없습니다 (제약 충돌).\n\n특정 날짜에 연가나 휴가가 너무 몰려있거나, 지정 휴일의 개수가 오버되었을 수 있습니다. 일정을 조금 조율한 뒤 다시 생성해 보세요!")
+            else:
+                st.rerun()
 
     if st.session_state.generated_results:
         st.markdown("### 📊 생성된 근무표 확인하기")
@@ -261,7 +267,6 @@ def render_detail_page():
 
     table_data = []
     
-    # 💡 1. 요일 행 만들기
     day_row = {"이름": "요일"}
     try:
         import holidays
@@ -275,20 +280,17 @@ def render_detail_page():
         is_off = (date_obj.weekday() >= 5) or (date_obj in kr_holidays)
         day_row[f"{d}일"] = f"{wd}(휴)" if is_off and date_obj.weekday() < 5 else wd
             
-    # 💡 버그 수정: '자세히 보기'가 켜져 있을 때만 통계 칸을 만듭니다.
     if show_details:
         for col in ["주간", "야간", "비번", "휴일", "연가", "특별", "교육", "합계"]:
             day_row[col] = None
     table_data.append(day_row)
     
-    # 💡 2. 요원별 스케줄 행 만들기
     for emp in res.employees:
         row = {"이름": emp.name}
         for d in month_days:
             shift = res.get_shift(emp.name, d)
             row[f"{d}일"] = shift.value if shift else ""
             
-        # 자세히 보기가 켜져 있을 때만 통계 데이터 입력
         if show_details:
             stats = res.get_stats(emp.name)
             row["주간"] = stats['주간']
@@ -301,7 +303,6 @@ def render_detail_page():
             row["합계"] = sum([stats[k] for k in ['주간', '야간', '비번', '휴일', '연가', '특별', '교육']])
         table_data.append(row)
 
-    # 💡 3. 하단 인원 합계 행 만들기 (자세히 보기가 켜져 있을 때만)
     if show_details:
         day_count_row = {"이름": "주간인원"}
         night_count_row = {"이름": "야간인원"}
@@ -322,7 +323,6 @@ def render_detail_page():
             config[f"{d}일"] = st.column_config.SelectboxColumn(
                 f"{d}일", options=["주", "야", "비", "휴", "연", "특", "교", "월", "화", "수", "목", "금", "토", "일", "월(휴)", "화(휴)", "수(휴)", "목(휴)", "금(휴)"]
             )
-        # 자세히 보기가 켜져 있을 때만 에디터 설정을 입힙니다
         if show_details:
             for col in ["주간", "야간", "비번", "휴일", "연가", "특별", "교육", "합계"]:
                 config[col] = st.column_config.TextColumn(col, disabled=True)
@@ -461,11 +461,12 @@ def render_individual_page():
             st.success(f"💾 {emp_name} 요원의 선호 설정이 데이터베이스에 임시 반영되었습니다.")
             
         if action_c2.button("🔄 이 설정 바탕으로 근무표 전체 재생성 (리스케줄링)", use_container_width=True):
-            if run_scheduling_engine():
+            is_success = run_scheduling_engine()
+            if is_success:
                 st.success("🎉 개인 최적화 변경사항을 반영하여 근무표가 완벽하게 리스케줄링(재생성) 되었습니다!")
                 st.rerun()
             else:
-                st.error("🚨 새로운 조건 제약이 너무 무거워 알고리즘 엔진이 해를 찾지 못했습니다. 제약을 완화해 주세요.")
+                st.error("🚨 새로운 조건이 너무 무거워 알고리즘 엔진이 해를 찾지 못했습니다. 일정을 약간 비워주시고 다시 시도해주세요.")
 
     st.markdown("---")
     st.markdown(f"### 🗓️ {month}월 스케줄 캘린더 구동 뷰어")
@@ -533,7 +534,6 @@ def render_individual_page():
                 """
                 w_cols[day_pos].markdown(html_box, unsafe_allow_html=True)
 
-# --- 메인 라우터 앱 흐름 기동 ---
 if st.session_state.page == 'main':
     render_main_page()
 elif st.session_state.page == 'detail':
