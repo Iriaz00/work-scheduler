@@ -13,13 +13,10 @@ class ShiftType(str, Enum):
     EDUCATION = '교'
 
     def is_off_day(self) -> bool:
-        """실제 휴가/휴무로 집계되는 유형"""
         return self in (ShiftType.HOLIDAY, ShiftType.ANNUAL, ShiftType.SPECIAL)
 
     def is_work_day(self) -> bool:
-        """근무일로 집계되는 유형 (비번·교육 포함)"""
         return self in (ShiftType.DAY, ShiftType.NIGHT, ShiftType.OFF, ShiftType.EDUCATION)
-
 
 ALL_SHIFTS: List[ShiftType] = list(ShiftType)
 
@@ -34,11 +31,19 @@ class Employee:
     prefer_day:      bool = False
     prefer_night:    bool = False
     fixed_schedules: List[FixedSchedule] = field(default_factory=list)
+    # 💡 [신규 추가] 소프트 제약으로 반영될 '희망 근무' 리스트
+    desired_schedules: List[FixedSchedule] = field(default_factory=list) 
 
     def get_fixed_shift(self, day: int) -> Optional[ShiftType]:
         for fs in self.fixed_schedules:
             if fs.day == day:
                 return fs.shift
+        return None
+
+    def get_desired_shift(self, day: int) -> Optional[ShiftType]:
+        for ds in self.desired_schedules:
+            if ds.day == day:
+                return ds.shift
         return None
 
 @dataclass
@@ -63,7 +68,6 @@ class MonthSchedule:
                          + cnt[ShiftType.ANNUAL]
                          + cnt[ShiftType.SPECIAL])
         return {
-            # 💡 주간 횟수에 교육 횟수를 더해서 표기합니다.
             '주간': cnt[ShiftType.DAY] + cnt[ShiftType.EDUCATION],
             '야간': cnt[ShiftType.NIGHT],
             '비번': cnt[ShiftType.OFF],
